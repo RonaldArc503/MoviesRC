@@ -21,10 +21,19 @@ import sv.edu.catolica.rex.ui.detalle.DetalleContenidoActivity;
 
 public class HomeActivity extends AppCompatActivity {
 
+    private static final long HOME_CACHE_TTL_MS = 7 * 60 * 1000L;
+    private static List<Section> homeSectionsCache;
+    private static long homeCacheSavedAtMs;
+
     private RecyclerView rvSections;
     private ProgressBar progressBar;
     private SearchView searchView;
     private HomeAdapter adapter;
+
+    private boolean isSearchMode = false;
+    private boolean suppressQueryListener = false;
+    private String lastSearchQuery = "";
+    private int activeRequestId = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,13 +58,45 @@ public class HomeActivity extends AppCompatActivity {
             }
 
             @Override
-            public boolean onQueryTextChange(String newText) { return false; }
+            public boolean onQueryTextChange(String newText) {
+                if (suppressQueryListener) {
+                    return false;
+                }
+
+                String text = newText == null ? "" : newText.trim();
+                if (text.isEmpty() && isSearchMode) {
+                    exitSearchModeAndRestoreHome();
+                    return true;
+                }
+                return false;
+            }
+        });
+
+        searchView.setOnCloseListener(() -> {
+            if (isSearchMode) {
+                exitSearchModeAndRestoreHome();
+                return true;
+            }
+            return false;
         });
 
         loadHomeData();
     }
 
     private void loadHomeData() {
+        loadHomeData(false);
+    }
+
+    private void loadHomeData(boolean forceRefresh) {
+        final int requestId = nextRequestId();
+        final List<Section> cachedSections = forceRefresh ? null : getCachedHomeSectionsIfFresh();
+
+        if (cachedSections != null && !cachedSections.isEmpty()) {
+            progressBar.setVisibility(ProgressBar.GONE);
+            showSections(cachedSections);
+            return;
+        }
+
         progressBar.setVisibility(ProgressBar.VISIBLE);
         new Thread(() -> {
             try {
@@ -89,8 +130,13 @@ public class HomeActivity extends AppCompatActivity {
                 if (!popularSeriesItems.isEmpty()) {
                     sections.add(new Section("⭐ Series Populares", popularSeriesItems));
                 }
+
+                cacheHomeSections(sections);
                 
                 runOnUiThread(() -> {
+                    if (!isRequestActive(requestId) || isSearchMode) {
+                        return;
+                    }
                     showSections(sections);
                     progressBar.setVisibility(ProgressBar.GONE);
                 });
@@ -98,6 +144,9 @@ public class HomeActivity extends AppCompatActivity {
             } catch (IOException e) {
                 e.printStackTrace();
                 runOnUiThread(() -> {
+                    if (!isRequestActive(requestId)) {
+                        return;
+                    }
                     progressBar.setVisibility(ProgressBar.GONE);
                     Toast.makeText(HomeActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
@@ -120,12 +169,17 @@ public class HomeActivity extends AppCompatActivity {
     private void performSearch(String query) {
         String safeQuery = query == null ? "" : query.trim();
         if (safeQuery.isEmpty()) {
-            loadHomeData();
+            exitSearchModeAndRestoreHome();
             return;
         }
 
+        isSearchMode = true;
+        lastSearchQuery = safeQuery;
+        final int requestId = nextRequestId();
+
         progressBar.setVisibility(ProgressBar.VISIBLE);
         searchView.clearFocus();
+        showSections(new ArrayList<>());
 
         new Thread(() -> {
             try {
@@ -156,8 +210,13 @@ public class HomeActivity extends AppCompatActivity {
                 }
 
                 runOnUiThread(() -> {
+                    if (!isRequestActive(requestId) || !isSearchMode || !safeQuery.equals(lastSearchQuery)) {
+                        return;
+                    }
+
                     progressBar.setVisibility(ProgressBar.GONE);
                     if (mappedResults.isEmpty()) {
+                        showSections(new ArrayList<>());
                         Toast.makeText(HomeActivity.this, "Sin resultados para: " + safeQuery, Toast.LENGTH_SHORT).show();
                         return;
                     }
@@ -166,11 +225,116 @@ public class HomeActivity extends AppCompatActivity {
                 });
             } catch (IOException e) {
                 runOnUiThread(() -> {
+                    if (!isRequestActive(requestId) || !isSearchMode || !safeQuery.equals(lastSearchQuery)) {
+                        return;
+                    }
                     progressBar.setVisibility(ProgressBar.GONE);
                     Toast.makeText(HomeActivity.this, "Error en búsqueda: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             }
         }).start();
+    }
+
+    private void exitSearchModeAndRestoreHome() {
+        isSearchMode = false;
+        lastSearchQuery = "";
+
+        suppressQueryListener = true;
+        searchView.setQuery("", false);
+        suppressQueryListener = false;
+        searchView.clearFocus();
+
+        loadHomeData(false);
+    }
+
+    private int nextRequestId() {
+        activeRequestId++;
+        return activeRequestId;
+    }
+
+    private boolean isRequestActive(int requestId) {
+        return requestId == activeRequestId;
+    }
+
+    @Override
+    public void onBackPressed() {
+        CharSequence queryText = searchView != null ? searchView.getQuery() : "";
+        boolean hasQuery = queryText != null && queryText.toString().trim().length() > 0;
+
+        if (isSearchMode || hasQuery) {
+            exitSearchModeAndRestoreHome();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    private static synchronized List<Section> getCachedHomeSectionsIfFresh() {
+        if (homeSectionsCache == null || homeSectionsCache.isEmpty()) {
+            return null;
+        }
+
+        long ageMs = System.currentTimeMillis() - homeCacheSavedAtMs;
+        if (ageMs > HOME_CACHE_TTL_MS) {
+            homeSectionsCache = null;
+            homeCacheSavedAtMs = 0L;
+            return null;
+        }
+
+        return copySections(homeSectionsCache);
+    }
+
+    private static synchronized void cacheHomeSections(List<Section> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return;
+        }
+
+        homeSectionsCache = copySections(sections);
+        homeCacheSavedAtMs = System.currentTimeMillis();
+    }
+
+    private static List<Section> copySections(List<Section> source) {
+        List<Section> copy = new ArrayList<>();
+        if (source == null) {
+            return copy;
+        }
+
+        for (Section section : source) {
+            if (section == null) {
+                continue;
+            }
+            String title = section.getTitle() == null ? "" : section.getTitle();
+            copy.add(new Section(title, copyMediaItems(section.getItems())));
+        }
+        return copy;
+    }
+
+    private static List<MediaItem> copyMediaItems(List<MediaItem> items) {
+        List<MediaItem> copy = new ArrayList<>();
+        if (items == null) {
+            return copy;
+        }
+
+        for (MediaItem item : items) {
+            if (item == null) {
+                continue;
+            }
+
+            MediaItem cloned = new MediaItem(
+                    item.getTitulo(),
+                    item.getAnio(),
+                    item.getImagen(),
+                    item.getDetailUrl(),
+                    0
+            );
+            cloned.setFuente(item.getFuente());
+            cloned.setMediaType(item.getMediaType());
+            cloned.setPostId(item.getPostId());
+            cloned.setSynopsis(item.getSynopsis());
+            cloned.setDublado(item.isDublado());
+            copy.add(cloned);
+        }
+
+        return copy;
     }
 
     private void showSections(List<Section> sections) {

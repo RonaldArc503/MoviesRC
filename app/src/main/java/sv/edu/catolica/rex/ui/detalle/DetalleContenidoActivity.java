@@ -179,7 +179,17 @@ public class DetalleContenidoActivity extends AppCompatActivity {
 
                     ArrayList<String> playList = new ArrayList<>(urls);
                     String playTitle = mediaItem.getTitulo() + " - " + label;
-                    PlayerContenidoActivity.start(DetalleContenidoActivity.this, playList, playTitle);
+                    PlayerContenidoActivity.startEpisode(
+                            DetalleContenidoActivity.this,
+                            playList,
+                            playTitle,
+                            mediaItem.getTitulo(),
+                            mediaItem.getPostId(),
+                            normalizePostType(mediaItem.getMediaType()),
+                            episode.id,
+                            episode.seasonNumber,
+                            episode.episodeNumber
+                    );
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
