@@ -394,8 +394,8 @@ public class AllCalidadScraper {
         episode.id = episodeObj.optInt("post_id", episodeObj.optInt("_id", episodeObj.optInt("ID", 0)));
         episode.seasonNumber = episodeObj.optInt("season_number", episodeObj.optInt("season", fallbackSeasonNumber));
         episode.episodeNumber = episodeObj.optInt(
-            "episode_number",
-            episodeObj.optInt("episode", episodeObj.optInt("number", fallbackEpisodeNumber))
+                "episode_number",
+                episodeObj.optInt("episode", episodeObj.optInt("number", fallbackEpisodeNumber))
         );
         episode.title = firstNonEmpty(episodeObj.optString("title"), episodeObj.optString("name"), "Episodio " + episode.episodeNumber);
         episode.overview = firstNonEmpty(episodeObj.optString("overview"), episodeObj.optString("description"));

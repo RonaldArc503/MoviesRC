@@ -145,6 +145,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         handler.postDelayed(autoPlayRunnable, 150L);
         handler.postDelayed(autoPlayRunnable, 1200L);
         handler.postDelayed(autoPlayRunnable, 2800L);
+        handler.postDelayed(autoPlayRunnable, 4500L);
     }
 
     private void requestAutoPlay() {
@@ -154,22 +155,33 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
         String js = "(function(){"
                 + "try {"
+                + "function isPlaying(media){return !!media && !media.paused && !media.ended && media.readyState > 2;}"
                 + "var media=document.querySelectorAll('video,audio');"
                 + "for (var i=0;i<media.length;i++){"
-                + "var m=media[i];"
-                + "m.muted=true;"
-                + "m.autoplay=true;"
-                + "var p=m.play();"
-                + "if(p&&p.catch){p.catch(function(){});}"
+                + "if(isPlaying(media[i])){return;}"
                 + "}"
+                + "var hasInlineMedia=media.length>0;"
+                + "for (var j=0;j<media.length;j++){"
+                + "var m=media[j];"
+                + "try{"
+                + "m.defaultMuted=false;"
+                + "m.muted=false;"
+                + "m.removeAttribute('muted');"
+                + "m.volume=1.0;"
+                + "m.autoplay=true;"
+                + "if(m.paused){var p=m.play();if(p&&p.catch){p.catch(function(){});}}"
+                + "}catch(e){}"
+                + "}"
+                + "if(!hasInlineMedia && !window.__rexPlayButtonClicked){"
                 + "var selectors=['.vjs-big-play-button','.jw-icon-playback','.jw-display-icon-container','.plyr__control--overlaid','.play-button','.btn-play','button[aria-label*=Play]'];"
-                + "for (var j=0;j<selectors.length;j++){"
-                + "var el=document.querySelector(selectors[j]);"
-                + "if(el){el.click();}"
+                + "for (var k=0;k<selectors.length;k++){"
+                + "var el=document.querySelector(selectors[k]);"
+                + "if(el){try{el.click();window.__rexPlayButtonClicked=true;break;}catch(e){}}"
+                + "}"
                 + "}"
                 + "var ifr=document.querySelectorAll('iframe');"
-                + "for (var k=0;k<ifr.length;k++){"
-                + "try { ifr[k].contentWindow.postMessage('{\"event\":\"command\",\"func\":\"playVideo\",\"args\":\"\"}','*'); } catch(e){}"
+                + "for (var n=0;n<ifr.length;n++){"
+                + "try { ifr[n].contentWindow.postMessage('{\"event\":\"command\",\"func\":\"playVideo\",\"args\":\"\"}','*'); } catch(e){}"
                 + "}"
                 + "} catch(err) {}"
                 + "})();";
