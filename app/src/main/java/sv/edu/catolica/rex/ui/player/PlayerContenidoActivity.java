@@ -512,6 +512,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         pageLoaded = false;
         autoNextTriggeredForCurrent = false;
 
+        if (webView != null) {
+            webView.clearHistory();
+        }
+
         String code = formatEpisodeCode(episode.seasonNumber, episode.episodeNumber);
         String title = seriesTitle + " - " + code;
         if (episode.title != null && !episode.title.trim().isEmpty()) {
@@ -671,7 +675,12 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) {
+        if (isSeriesEpisodePlayback()) {
+            finish();
+            return;
+        }
+
+        if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
             super.onBackPressed();
