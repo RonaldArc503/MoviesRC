@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="purple_500">#E50914</color>
+    <color name="purple_700">#B20710</color>
+
+    <color name="bgPrimary">#0B0B10</color>
+    <color name="bgSecondary">#141421</color>
+    <color name="surfaceCard">#1A1A2A</color>
+    <color name="surfaceCardAlt">#222235</color>
+    <color name="searchSurface">#16162A</color>
+    <color name="strokeSoft">#2E2E46</color>
+    <color name="textPrimary">#F5F5F7</color>
+    <color name="textSecondary">#B8B8C7</color>
+    <color name="textMuted">#8C8CA3</color>
+    <color name="accentRed">#E50914</color>
+    <color name="accentRedDark">#A8060F</color>
+    <color name="accentGold">#F5C451</color>
+</resources>
