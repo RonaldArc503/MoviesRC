@@ -7,6 +7,7 @@ public class MediaItem implements Serializable {
     private int postId;
     private String synopsis;
     private boolean isDublado;
+    private double rating;  // ✅ AGREGAR ESTO
 
     public MediaItem(String titulo, String anio, String imagen, String detailUrl, int dummy) {
         this.titulo = titulo;
@@ -15,6 +16,7 @@ public class MediaItem implements Serializable {
         this.detailUrl = detailUrl;
         this.postId = 0;
         this.synopsis = "";
+        this.rating = 0.0;  // ✅ Inicializar rating
     }
 
     public MediaItem(String titulo, String anio, String imagen, String detailUrl, int postId, boolean isDummyConstructor) {
@@ -24,8 +26,10 @@ public class MediaItem implements Serializable {
         this.detailUrl = detailUrl;
         this.postId = postId;
         this.synopsis = "";
+        this.rating = 0.0;  // ✅ Inicializar rating
     }
 
+    // Getters y Setters existentes
     public String getTitulo() { return titulo; }
     public void setTitulo(String titulo) { this.titulo = titulo; }
     public String getAnio() { return anio; }
@@ -44,4 +48,8 @@ public class MediaItem implements Serializable {
     public void setSynopsis(String synopsis) { this.synopsis = synopsis; }
     public boolean isDublado() { return isDublado; }
     public void setDublado(boolean dublado) { isDublado = dublado; }
+
+    // ✅ AGREGAR ESTOS MÉTODOS para rating
+    public double getRating() { return rating; }
+    public void setRating(double rating) { this.rating = rating; }
 }

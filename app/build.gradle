@@ -68,4 +68,5 @@ dependencies {
     implementation 'org.json:json:20231013'
     // Material (ensure up-to-date)
     implementation 'com.google.android.material:material:1.11.0'
+
 }

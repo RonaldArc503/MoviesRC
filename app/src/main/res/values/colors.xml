@@ -17,4 +17,5 @@
     <color name="accentRed">#E50914</color>
     <color name="accentRedDark">#A8060F</color>
     <color name="accentGold">#F5C451</color>
+    <color name="bg_dark">#121212</color>
 </resources>

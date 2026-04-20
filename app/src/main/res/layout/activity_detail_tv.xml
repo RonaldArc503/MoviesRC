@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- activity_detail_tv.xml — Netflix-style detail layout for TV (landscape) -->
+<!-- Coloca este archivo en: res/layout-television/ para aplicarlo automáticamente en TV -->
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <!-- Backdrop full-screen con gradiente lateral -->
+    <ImageView
+        android:id="@+id/iv_backdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:contentDescription="@null" />
+
+    <!-- Gradiente lateral oscurece el lado izquierdo donde va el texto -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/gradient_tv_lateral" />
+
+    <!-- Gradiente inferior sutil -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/gradient_tv_bottom" />
+
+    <!-- Contenido principal: izquierda = info, derecha = episodios -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal">
+
+        <!-- ====== PANEL IZQUIERDO: Información del título ====== -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+
+            android:paddingStart="80dp"
+            android:paddingEnd="40dp"
+            android:paddingTop="60dp"
+            android:paddingBottom="60dp"
+            android:gravity="center_vertical">
+
+            <!-- Tipo y calidad -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <TextView
+                    android:id="@+id/tv_badge_type"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/badge_red"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:text="SERIE"
+                    android:letterSpacing="0.08" />
+
+                <TextView
+                    android:id="@+id/tv_badge_quality"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/badge_outline"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:text="4K"
+                    android:letterSpacing="0.08" />
+            </LinearLayout>
+
+            <!-- Título grande -->
+            <TextView
+                android:id="@+id/tv_title_hero"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/white"
+                android:textSize="52sp"
+                android:textStyle="bold"
+                android:lineSpacingExtra="4dp"
+                android:shadowColor="#99000000"
+                android:shadowRadius="12"
+                android:shadowDx="0"
+                android:shadowDy="3"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:text="Título" />
+
+            <!-- Metadata: año, rating, temporadas -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tv_year_hero"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#FFD700"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:text="2024" />
+
+                <View
+                    android:layout_width="5dp"
+                    android:layout_height="5dp"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/dot_separator" />
+
+                <TextView
+                    android:id="@+id/tv_rating"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#BBBBBB"
+                    android:textSize="16sp"
+                    android:text="★ 8.4" />
+
+                <View
+                    android:layout_width="5dp"
+                    android:layout_height="5dp"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/dot_separator" />
+
+                <TextView
+                    android:id="@+id/tv_seasons_count"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#BBBBBB"
+                    android:textSize="16sp"
+                    android:text="3 temporadas" />
+            </LinearLayout>
+
+            <!-- Sinopsis -->
+            <TextView
+                android:id="@+id/tv_synopsis"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:textColor="#DDDDDD"
+                android:textSize="16sp"
+                android:lineSpacingExtra="5dp"
+                android:maxLines="4"
+                android:ellipsize="end"
+                android:text="Sinopsis del contenido..." />
+
+            <!-- Géneros en chips -->
+            <LinearLayout
+                android:id="@+id/ll_genres"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="20dp" />
+
+            <!-- Botones de acción -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="36dp">
+
+                <!-- Botón Reproducir (grande, TV) -->
+                <Button
+                    android:id="@+id/btn_play"
+                    android:layout_width="220dp"
+                    android:layout_height="56dp"
+                    android:background="@drawable/bg_btn_play_red_tv"
+                    android:textColor="@color/white"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:text="▶  Reproducir"
+                    android:textAllCaps="false"
+                    android:focusable="true"
+                    android:nextFocusRight="@+id/btn_my_list" />
+
+                <!-- Botón Mi Lista -->
+                <Button
+                    android:id="@+id/btn_my_list"
+                    android:layout_width="180dp"
+                    android:layout_height="56dp"
+                    android:layout_marginStart="16dp"
+                    android:background="@drawable/bg_btn_secondary_tv"
+                    android:textColor="@color/white"
+                    android:textSize="16sp"
+                    android:textAllCaps="false"
+                    android:text="+ Mi Lista"
+                    android:focusable="true"
+                    android:nextFocusLeft="@id/btn_play"
+                    android:nextFocusRight="@+id/rv_episodes" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- ====== PANEL DERECHO: Lista de episodios ====== -->
+        <FrameLayout
+            android:id="@+id/panel_episodes"
+            android:layout_width="380dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_panel_episodes"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:padding="24dp">
+
+                <!-- Header del panel de episodios -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="16dp">
+
+                    <TextView
+                        android:id="@+id/tv_episodes_title"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:text="Episodios"
+                        android:textColor="@color/white"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tv_season_selector"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_season_selector"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        android:focusable="true"
+                        android:text="Temporada 1  ▾" />
+                </LinearLayout>
+
+                <!-- Lista de episodios (TV-friendly: items grandes y focusables) -->
+                <sv.edu.catolica.rex.ui.detalle.WrapContentRecyclerView
+                    android:id="@+id/rv_episodes"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:nestedScrollingEnabled="true"
+                    android:focusable="true" />
+
+            </LinearLayout>
+        </FrameLayout>
+
+    </LinearLayout>
+
+    <!-- Back button (TV: esquina superior izquierda) -->
+    <ImageView
+        android:id="@+id/iv_back"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="32dp"
+        android:src="@drawable/ic_arrow_back"
+        android:tint="@color/white"
+        android:focusable="true"
+        android:background="@drawable/bg_back_button_tv"
+        android:contentDescription="Volver" />
+
+</FrameLayout>

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- item_episode.xml para res/layout-television/ — TV-friendly -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp"
+    android:paddingStart="8dp"
+    android:paddingEnd="8dp"
+    android:gravity="center_vertical"
+    android:focusable="true"
+    android:background="@drawable/bg_episode_item_tv">
+
+    <!-- Número de episodio -->
+    <TextView
+        android:id="@+id/tv_episode_code"
+        android:layout_width="44dp"
+        android:layout_height="wrap_content"
+        android:textColor="#888888"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:text="1" />
+
+    <!-- Thumbnail -->
+    <FrameLayout
+        android:layout_width="140dp"
+        android:layout_height="80dp"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="12dp">
+
+        <ImageView
+            android:id="@+id/iv_episode_thumb"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:background="@drawable/placeholder_episode"
+            android:contentDescription="@null" />
+
+        <ImageView
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_play_circle"
+            android:tint="#BBFFFFFF"
+            android:contentDescription="@null" />
+    </FrameLayout>
+
+    <!-- Textos -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tv_episode_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="Título del episodio" />
+
+        <TextView
+            android:id="@+id/tv_episode_duration"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#888888"
+            android:textSize="13sp"
+            android:text="45 min" />
+    </LinearLayout>
+
+</LinearLayout>

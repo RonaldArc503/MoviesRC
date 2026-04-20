@@ -30,13 +30,15 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
 
     public HomeAdapter(Context context, List<Section> sections,
                        OnItemClickListener listener, boolean isTv) {
-        this.context  = context;
+        this.context = context;
         this.sections = sections;
         this.listener = listener;
-        this.isTv     = isTv;
+        this.isTv = isTv;
     }
 
-    /** Refresca las cards tras enriquecimiento TMDB en background */
+    /**
+     * Refresca las cards tras enriquecimiento TMDB en background
+     */
     public void notifySectionsChanged() {
         notifyDataSetChanged();
     }
@@ -66,7 +68,7 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         SectionViewHolder(@NonNull View itemView) {
             super(itemView);
             tvSectionTitle = itemView.findViewById(R.id.section_title);
-            rvItems        = itemView.findViewById(R.id.rv_items);
+            rvItems = itemView.findViewById(R.id.rv_items);
             rvItems.setLayoutManager(new LinearLayoutManager(
                     context, LinearLayoutManager.HORIZONTAL, false));
         }
@@ -90,21 +92,21 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         private final Context context;
 
         // Dimensiones TV (dp → px se calcula en ViewHolder)
-        private static final int TV_CARD_WIDTH_DP  = 220;
+        private static final int TV_CARD_WIDTH_DP = 220;
         private static final int TV_CARD_HEIGHT_DP = 340;
         private static final int TV_IMAGE_HEIGHT_DP = 260;
 
         // Dimensiones teléfono (igual que el XML original)
-        private static final int PHONE_CARD_WIDTH_DP  = 166;
+        private static final int PHONE_CARD_WIDTH_DP = 166;
         private static final int PHONE_CARD_HEIGHT_DP = 272;
         private static final int PHONE_IMAGE_HEIGHT_DP = 198;
 
         HorizontalItemAdapter(Context context, List<MediaItem> items,
-                               OnItemClickListener listener, boolean isTv) {
-            this.context  = context;
-            this.items    = items;
+                              OnItemClickListener listener, boolean isTv) {
+            this.context = context;
+            this.items = items;
             this.listener = listener;
-            this.isTv     = isTv;
+            this.isTv = isTv;
         }
 
         @NonNull
@@ -127,34 +129,33 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         }
 
         static class ViewHolder extends RecyclerView.ViewHolder {
-            final CardView  cardView;
+            final CardView cardView;
             final ImageView ivPoster;
-            final TextView  tvTitle;
-            final TextView  tvYear;
-            final boolean   isTv;
+            final TextView tvTitle;
+            final TextView tvYear;
+            final boolean isTv;
 
             ViewHolder(@NonNull View itemView, boolean isTv, Context context) {
                 super(itemView);
                 this.isTv = isTv;
-                cardView  = (CardView) itemView;
-                ivPoster  = itemView.findViewById(R.id.iv_poster);
-                tvTitle   = itemView.findViewById(R.id.tv_title);
-                tvYear    = itemView.findViewById(R.id.tv_year);
+                cardView = (CardView) itemView;
+                ivPoster = itemView.findViewById(R.id.iv_poster);
+                tvTitle = itemView.findViewById(R.id.tv_title);
+                tvYear = itemView.findViewById(R.id.tv_year);
 
                 float density = context.getResources().getDisplayMetrics().density;
 
                 if (isTv) {
-                    // ── Tamaño TV más grande ──────────────────────────────────
-                    int cardW  = (int)(TV_CARD_WIDTH_DP  * density);
-                    int cardH  = (int)(TV_CARD_HEIGHT_DP * density);
-                    int imgH   = (int)(TV_IMAGE_HEIGHT_DP * density);
+                    // Configuración para TV
+                    int cardW = (int) (TV_CARD_WIDTH_DP * density);
+                    int cardH = (int) (TV_CARD_HEIGHT_DP * density);
+                    int imgH = (int) (TV_IMAGE_HEIGHT_DP * density);
 
-                    ViewGroup.MarginLayoutParams lp =
-                            (ViewGroup.MarginLayoutParams) cardView.getLayoutParams();
+                    ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) cardView.getLayoutParams();
                     if (lp == null) lp = new ViewGroup.MarginLayoutParams(cardW, cardH);
-                    lp.width  = cardW;
+                    lp.width = cardW;
                     lp.height = cardH;
-                    lp.setMarginEnd((int)(12 * density));
+                    lp.setMarginEnd((int) (12 * density));
                     cardView.setLayoutParams(lp);
 
                     ViewGroup.LayoutParams imgLp = ivPoster.getLayoutParams();
@@ -164,47 +165,43 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     tvTitle.setTextSize(14f);
                     tvYear.setTextSize(12f);
 
-                    // ── Focus TV: escala + borde blanco ──────────────────────
                     setupTvFocus(density);
-
                 } else {
-                    // Teléfono: dimensiones del XML original
-                    int cardW = (int)(PHONE_CARD_WIDTH_DP  * density);
-                    int cardH = (int)(PHONE_CARD_HEIGHT_DP * density);
-                    int imgH  = (int)(PHONE_IMAGE_HEIGHT_DP * density);
+                    // ✅ CONFIGURACIÓN PARA MÓVIL - Deshabilitar focus completamente
+                    int cardW = (int) (PHONE_CARD_WIDTH_DP * density);
+                    int cardH = (int) (PHONE_CARD_HEIGHT_DP * density);
+                    int imgH = (int) (PHONE_IMAGE_HEIGHT_DP * density);
 
-                    ViewGroup.MarginLayoutParams lp =
-                            (ViewGroup.MarginLayoutParams) cardView.getLayoutParams();
+                    ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) cardView.getLayoutParams();
                     if (lp == null) lp = new ViewGroup.MarginLayoutParams(cardW, cardH);
-                    lp.width  = cardW;
+                    lp.width = cardW;
                     lp.height = cardH;
-                    lp.setMarginEnd((int)(10 * density));
+                    lp.setMarginEnd((int) (10 * density));
                     cardView.setLayoutParams(lp);
 
                     ViewGroup.LayoutParams imgLp = ivPoster.getLayoutParams();
                     if (imgLp != null) imgLp.height = imgH;
                     ivPoster.setLayoutParams(imgLp);
+
+                    // ✅ IMPORTANTE: Deshabilitar focus en móvil
+                    cardView.setFocusable(false);
+                    cardView.setFocusableInTouchMode(false);
+                    cardView.setClickable(true);
+
+                    // Resetear alpha (por si acaso)
+                    cardView.setAlpha(1.0f);
+                    cardView.setCardElevation(0);
                 }
             }
 
-            /**
-             * Configura el efecto de foco HBO Max para TV:
-             *  - Se escala un poco más grande
-             *  - Borde blanco visible
-             *  - Elevación aumentada
-             *  - Brillo/alpha de las no-focalizadas reducido
-             */
             private void setupTvFocus(float density) {
                 cardView.setFocusable(true);
                 cardView.setFocusableInTouchMode(true);
                 cardView.setClickable(true);
-
-                // Estado inicial: un poco translúcido (estilo HBO Max)
                 cardView.setAlpha(0.82f);
 
                 cardView.setOnFocusChangeListener((v, hasFocus) -> {
                     if (hasFocus) {
-                        // ── FOCUSADO: más grande, borde blanco, opaco ────────
                         v.animate()
                                 .scaleX(1.10f)
                                 .scaleY(1.10f)
@@ -212,12 +209,10 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                                 .setDuration(180)
                                 .start();
                         cardView.setCardElevation(16 * density);
-                        // Borde blanco con overlay semi-transparente sobre la card
                         cardView.setForeground(
                                 v.getContext().getResources()
                                         .getDrawable(R.drawable.bg_card_focused, null));
                     } else {
-                        // ── DESFOCUSADO: tamaño normal, semi-transparente ────
                         v.animate()
                                 .scaleX(1.0f)
                                 .scaleY(1.0f)
@@ -240,10 +235,28 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                         .error(R.drawable.placeholder_poster)
                         .into(ivPoster);
 
-                itemView.setOnClickListener(v -> {
-                    if (listener != null) listener.onItemClick(item);
-                });
+                // ✅ Limpiar listener anterior y asignar nuevo
+                itemView.setOnClickListener(null);
+
+                // Para móvil, aseguramos que el click funcione
+                if (!isTv) {
+                    itemView.setOnClickListener(v -> {
+                        if (listener != null) {
+                            listener.onItemClick(item);
+                        }
+                    });
+                } else {
+                    // Para TV, mantener el click
+                    itemView.setOnClickListener(v -> {
+                        if (listener != null) {
+                            listener.onItemClick(item);
+                        }
+                    });
+                }
             }
         }
+
     }
+
 }
+

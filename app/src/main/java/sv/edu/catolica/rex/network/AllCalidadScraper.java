@@ -294,6 +294,16 @@ public class AllCalidadScraper {
         mi.setPostId(item.id);
         mi.setSynopsis(item.overview != null ? item.overview : "");
         mi.setMediaType(item.type    != null ? item.type     : "movies");
+
+        // ✅ AGREGAR ESTO - Guardar el rating del JSON
+        if (item.rating != null && !item.rating.isEmpty()) {
+            try {
+                mi.setRating(Double.parseDouble(item.rating));
+            } catch (NumberFormatException e) {
+                mi.setRating(0.0);
+            }
+        }
+
         return mi;
     }
 

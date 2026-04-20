@@ -22,7 +22,8 @@ import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.Section;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
-import sv.edu.catolica.rex.ui.detalle.DetalleContenidoActivity;
+import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
+//import sv.edu.catolica.rex.ui.detalle.DetalleContenidoActivity;
 
 public class HomeActivity extends AppCompatActivity {
 
@@ -57,8 +58,8 @@ public class HomeActivity extends AppCompatActivity {
         searchView  = findViewById(R.id.search_view);
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
-        adapter = new HomeAdapter(this, new ArrayList<>(),
-                item -> DetalleContenidoActivity.start(HomeActivity.this, item), isTv);
+       adapter = new HomeAdapter(this, new ArrayList<>(),
+        item -> DetalleActivity.start(HomeActivity.this, item), isTv);
         rvSections.setAdapter(adapter);
 
         searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
@@ -333,7 +334,7 @@ public class HomeActivity extends AppCompatActivity {
 
     private void showSections(List<Section> sections) {
         adapter = new HomeAdapter(this, sections,
-                item -> DetalleContenidoActivity.start(HomeActivity.this, item), isTv);
+                item -> DetalleActivity.start(HomeActivity.this, item), isTv);
         rvSections.setAdapter(adapter);
     }
 }
