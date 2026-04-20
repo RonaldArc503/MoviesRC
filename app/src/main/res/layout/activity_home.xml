@@ -21,7 +21,7 @@
             android:background="@drawable/bg_toolbar_scrim"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
-            app:title="AllCalidad"
+            app:title="REX"
             app:titleTextColor="@color/textPrimary"
             app:titleTextAppearance="@style/TextAppearance.Material3.TitleLarge" />
 
