@@ -10,6 +10,9 @@ if (localPropertiesFile.exists()) {
     localProperties.load(new FileInputStream(localPropertiesFile))
 }
 def tmdbApiKey = localProperties.getProperty("tmdb.api.key", "")
+if (!tmdbApiKey || tmdbApiKey.trim().isEmpty()) {
+    tmdbApiKey = (findProperty("tmdb.api.key") ?: findProperty("TMDB_API_KEY") ?: System.getenv("TMDB_API_KEY") ?: "").toString()
+}
 
 android {
     namespace 'sv.edu.catolica.rex'
@@ -68,5 +71,9 @@ dependencies {
     implementation 'org.json:json:20231013'
     // Material (ensure up-to-date)
     implementation 'com.google.android.material:material:1.11.0'
+
+    // ExoPlayer (Media3) for native HLS/MP4 playback, including Android TV DPAD support
+    implementation 'androidx.media3:media3-exoplayer:1.5.1'
+    implementation 'androidx.media3:media3-ui:1.5.1'
 
 }

@@ -14,12 +14,15 @@ import androidx.appcompat.widget.SearchView;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import sv.edu.catolica.rex.BuildConfig;
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.Section;
@@ -48,6 +51,7 @@ public class HomeActivity extends AppCompatActivity {
     private boolean suppressQueryListener = false;
     private String  lastSearchQuery       = "";
     private int     activeRequestId       = 0;
+    private boolean tmdbKeyWarningShown   = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -154,16 +158,18 @@ public class HomeActivity extends AppCompatActivity {
         if (cached != null && !cached.isEmpty()) {
             progressBar.setVisibility(ProgressBar.GONE);
             showSections(cached);
-            return;
+            if (hasTmdbHomeSections(cached)) {
+                return;
+            }
         }
 
         progressBar.setVisibility(ProgressBar.VISIBLE);
 
         new Thread(() -> {
             try {
-                // Lanzar las 5 peticiones EN PARALELO pero escalonadas ~120ms
+                // Lanzar peticiones EN PARALELO pero escalonadas ~120ms
                 // para no parecer un burst de bot al mismo host
-                ExecutorService pool = Executors.newFixedThreadPool(5);
+                ExecutorService pool = Executors.newFixedThreadPool(7);
 
                 Future<List<AllCalidadScraper.ContentItem>> featuredFuture =
                         pool.submit((Callable<List<AllCalidadScraper.ContentItem>>)
@@ -182,6 +188,12 @@ public class HomeActivity extends AppCompatActivity {
                 Future<List<AllCalidadScraper.ContentItem>> popularSeriesFuture =
                         pool.submit((Callable<List<AllCalidadScraper.ContentItem>>)
                                 AllCalidadScraper::getPopularTvShows);
+                stagger();
+                Future<List<MediaItem>> tmdbPopularFuture =
+                        pool.submit(() -> TmdbService.getPopularHomeItems(20));
+                stagger();
+                Future<List<MediaItem>> tmdbTrendingFuture =
+                        pool.submit(() -> TmdbService.getTrendingHomeItems(20));
                 pool.shutdown();
 
                 // Recolectar (ya están corriendo en paralelo)
@@ -190,6 +202,8 @@ public class HomeActivity extends AppCompatActivity {
                 List<AllCalidadScraper.ContentItem> latest        = safeGet(latestFuture);
                 List<AllCalidadScraper.ContentItem> series        = safeGet(seriesFuture);
                 List<AllCalidadScraper.ContentItem> popularSeries = safeGet(popularSeriesFuture);
+                List<MediaItem> tmdbPopular = safeGet(tmdbPopularFuture);
+                List<MediaItem> tmdbTrending = safeGet(tmdbTrendingFuture);
 
                 List<MediaItem> featuredItems      = mapItems(featured,      10);
                 List<MediaItem> popularItems       = mapItems(popular,       16);
@@ -200,13 +214,15 @@ public class HomeActivity extends AppCompatActivity {
                 // Mostrar secciones SIN esperar TMDB
                 final List<Section> sections = buildSections(
                         featuredItems, popularItems, latestItems,
-                        seriesItems, popularSeriesItems);
+                        seriesItems, popularSeriesItems,
+                        tmdbPopular, tmdbTrending);
                 cacheHomeSections(sections);
 
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || isSearchMode) return;
                     showSections(sections);
                     progressBar.setVisibility(ProgressBar.GONE);
+                    maybeWarnMissingTmdbKey();
                 });
 
                 // TMDB en background (paralelo, no bloquea la UI)
@@ -235,13 +251,20 @@ public class HomeActivity extends AppCompatActivity {
 
     private List<Section> buildSections(
             List<MediaItem> fi, List<MediaItem> pi,
-            List<MediaItem> li, List<MediaItem> si, List<MediaItem> psi) {
+            List<MediaItem> li, List<MediaItem> si, List<MediaItem> psi,
+            List<MediaItem> tmdbPopular, List<MediaItem> tmdbTrending) {
         List<Section> s = new ArrayList<>();
         s.add(new Section("🔥 Destacadas",       fi.isEmpty() ? li : fi));
         s.add(new Section("📈 Populares del Mes", pi.isEmpty() ? li : pi));
         s.add(new Section("🎬 Últimas Películas", li));
         if (!si.isEmpty())  s.add(new Section("📺 Series",          si));
         if (!psi.isEmpty()) s.add(new Section("⭐ Series Populares", psi));
+        if (tmdbPopular != null && !tmdbPopular.isEmpty()) {
+            s.add(new Section("Populares TMDB", tmdbPopular));
+        }
+        if (tmdbTrending != null && !tmdbTrending.isEmpty()) {
+            s.add(new Section("Tendencias", tmdbTrending));
+        }
         return s;
     }
 
@@ -264,6 +287,41 @@ public class HomeActivity extends AppCompatActivity {
         return result;
     }
 
+    private List<MediaItem> mergeSearchResults(
+            List<MediaItem> primary, List<MediaItem> secondary, int limit) {
+        LinkedHashMap<String, MediaItem> unique = new LinkedHashMap<>();
+        appendUniqueSearchItems(unique, primary, limit);
+        appendUniqueSearchItems(unique, secondary, limit);
+        return new ArrayList<>(unique.values());
+    }
+
+    private void appendUniqueSearchItems(
+            Map<String, MediaItem> target, List<MediaItem> source, int limit) {
+        if (source == null || source.isEmpty() || target.size() >= limit) {
+            return;
+        }
+        for (MediaItem item : source) {
+            if (item == null || target.size() >= limit) {
+                break;
+            }
+            String key = buildSearchKey(item);
+            if (!target.containsKey(key)) {
+                target.put(key, item);
+            }
+        }
+    }
+
+    private String buildSearchKey(MediaItem item) {
+        if (item.getTmdbId() > 0) {
+            return (item.getMediaType() == null ? "" : item.getMediaType())
+                    + "|" + item.getTmdbId();
+        }
+        String title = item.getTitulo() == null ? "" : item.getTitulo().trim().toLowerCase(Locale.ROOT);
+        String year = item.getAnio() == null ? "" : item.getAnio().trim();
+        String type = item.getMediaType() == null ? "" : item.getMediaType().trim().toLowerCase(Locale.ROOT);
+        return title + "|" + year + "|" + type;
+    }
+
     private void performSearch(String query) {
         String safeQuery = query == null ? "" : query.trim();
         if (safeQuery.isEmpty()) { exitSearchModeAndRestoreHome(); return; }
@@ -280,9 +338,11 @@ public class HomeActivity extends AppCompatActivity {
             try {
                 List<AllCalidadScraper.ContentItem> results = AllCalidadScraper.search(safeQuery, 1);
                 List<MediaItem> mapped = mapItems(results, 40);
+                List<MediaItem> tmdbMapped = TmdbService.searchMedia(safeQuery, 40);
+                List<MediaItem> merged = mergeSearchResults(mapped, tmdbMapped, 60);
 
                 List<MediaItem> movies = new ArrayList<>(), series = new ArrayList<>();
-                for (MediaItem item : mapped) {
+                for (MediaItem item : merged) {
                     String type = item.getMediaType() == null ? "" :
                             item.getMediaType().toLowerCase(Locale.ROOT);
                     if ("tvshows".equals(type) || "animes".equals(type)) series.add(item);
@@ -292,13 +352,13 @@ public class HomeActivity extends AppCompatActivity {
                 List<Section> sections = new ArrayList<>();
                 if (!movies.isEmpty())  sections.add(new Section("🎬 Películas", movies));
                 if (!series.isEmpty())  sections.add(new Section("📺 Series",    series));
-                if (sections.isEmpty()) sections.add(new Section("🔎 Resultados", mapped));
+                if (sections.isEmpty()) sections.add(new Section("🔎 Resultados", merged));
 
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || !isSearchMode ||
                             !safeQuery.equals(lastSearchQuery)) return;
                     progressBar.setVisibility(ProgressBar.GONE);
-                    if (mapped.isEmpty()) {
+                    if (merged.isEmpty()) {
                         showSections(new ArrayList<>());
                         Toast.makeText(HomeActivity.this,
                                 "Sin resultados para: " + safeQuery, Toast.LENGTH_SHORT).show();
@@ -309,7 +369,18 @@ public class HomeActivity extends AppCompatActivity {
                             "Resultados para: " + safeQuery, Toast.LENGTH_SHORT).show();
                 });
 
-                TmdbService.enrichMediaItemsParallel(mapped);
+                List<MediaItem> enrichCandidates = new ArrayList<>();
+                for (MediaItem item : merged) {
+                    if (item == null) {
+                        continue;
+                    }
+                    String source = item.getFuente() == null ? "" : item.getFuente().trim().toLowerCase(Locale.ROOT);
+                    if ("tmdb".equals(source) && item.getTmdbId() > 0) {
+                        continue;
+                    }
+                    enrichCandidates.add(item);
+                }
+                TmdbService.enrichMediaItemsParallel(enrichCandidates);
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || !isSearchMode) return;
                     if (adapter != null) adapter.notifySectionsChanged();
@@ -339,6 +410,18 @@ public class HomeActivity extends AppCompatActivity {
     private int nextRequestId()             { return ++activeRequestId; }
     private boolean isRequestActive(int id) { return id == activeRequestId; }
 
+    private void maybeWarnMissingTmdbKey() {
+        if (tmdbKeyWarningShown) {
+            return;
+        }
+        if (BuildConfig.TMDB_API_KEY == null || BuildConfig.TMDB_API_KEY.trim().isEmpty()) {
+            tmdbKeyWarningShown = true;
+            Toast.makeText(this,
+                    "TMDB API Key no configurada: agrega tmdb.api.key en local.properties",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override
     public void onBackPressed() {
         CharSequence q = searchView != null ? searchView.getQuery() : "";
@@ -360,6 +443,29 @@ public class HomeActivity extends AppCompatActivity {
         if (sections == null || sections.isEmpty()) return;
         homeSectionsCache  = copySections(sections);
         homeCacheSavedAtMs = System.currentTimeMillis();
+    }
+
+    private boolean hasTmdbHomeSections(List<Section> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return false;
+        }
+        boolean hasPopularTmdb = false;
+        boolean hasTrending = false;
+        for (Section section : sections) {
+            if (section == null || section.getTitle() == null) {
+                continue;
+            }
+            String title = section.getTitle().trim().toLowerCase(Locale.ROOT);
+            if ("populares tmdb".equals(title)) {
+                hasPopularTmdb = true;
+            } else if ("tendencias".equals(title)) {
+                hasTrending = true;
+            }
+            if (hasPopularTmdb && hasTrending) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<Section> copySections(List<Section> source) {
@@ -385,6 +491,9 @@ public class HomeActivity extends AppCompatActivity {
             c.setPostId(item.getPostId());
             c.setSynopsis(item.getSynopsis());
             c.setDublado(item.isDublado());
+            c.setRating(item.getRating());
+            c.setTmdbId(item.getTmdbId());
+            c.setImdbId(item.getImdbId());
             copy.add(c);
         }
         return copy;

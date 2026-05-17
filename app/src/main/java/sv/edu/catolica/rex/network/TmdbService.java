@@ -11,6 +11,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -26,6 +27,7 @@ public class TmdbService {
     private static final String API_BASE   = "https://api.themoviedb.org/3";
     private static final String IMAGE_BASE = "https://image.tmdb.org/t/p/w500";
     private static final int    TIMEOUT_MS = 15000;
+    private static final long   EXTERNAL_IDS_429_COOLDOWN_MS = 60_000L;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36";
 
@@ -35,10 +37,15 @@ public class TmdbService {
     private static class TmdbResult {
         String posterUrl;
         String overview;
+        int tmdbId;
+        String imdbId;
+        String tmdbMediaType;
     }
 
     // ─── Caché en memoria para evitar llamadas duplicadas ─────────────────────
     private static final Map<String, TmdbResult> resultCache = new HashMap<>();
+    private static final Map<String, String> externalIdsCache = new HashMap<>();
+    private static volatile long externalIdsBlockedUntilMs = 0L;
 
     /**
      * Enriquece todos los ítems EN PARALELO usando un pool de hilos.
@@ -105,6 +112,110 @@ public class TmdbService {
         applyResult(item, result);
     }
 
+    public static void ensureExternalIds(MediaItem item) {
+        if (item == null) return;
+        String imdb = item.getImdbId();
+        if (item.getTmdbId() > 0 && imdb != null && imdb.matches("tt\\d+")) {
+            return;
+        }
+        enrichMediaItem(item);
+    }
+
+    public static List<MediaItem> getPopularHomeItems(int limit) {
+        List<MediaItem> movies = fetchHomeItemsByEndpoint("/movie/popular", "movie", limit);
+        List<MediaItem> tv = fetchHomeItemsByEndpoint("/tv/popular", "tv", limit);
+        return mergeInterleavedAndTrim(movies, tv, limit);
+    }
+
+    public static List<MediaItem> getTrendingHomeItems(int limit) {
+        if (limit <= 0 || BuildConfig.TMDB_API_KEY == null || BuildConfig.TMDB_API_KEY.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        List<MediaItem> out = new ArrayList<>();
+        Map<String, Boolean> seen = new LinkedHashMap<>();
+        try {
+            String url = API_BASE + "/trending/all/week?api_key="
+                    + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8")
+                    + "&language=es-ES&page=1";
+
+            JSONObject root = new JSONObject(httpGet(url));
+            JSONArray results = root.optJSONArray("results");
+            if (results == null) {
+                return out;
+            }
+
+            for (int i = 0; i < results.length() && out.size() < limit; i++) {
+                JSONObject raw = results.optJSONObject(i);
+                if (raw == null) {
+                    continue;
+                }
+
+                String tmdbType = normalizeTmdbMediaType(raw.optString("media_type", ""));
+                MediaItem item = toHomeMediaItem(raw, tmdbType, false);
+                if (item == null) {
+                    continue;
+                }
+
+                String key = item.getMediaType() + "|" + item.getTmdbId();
+                if (seen.containsKey(key)) {
+                    continue;
+                }
+                seen.put(key, true);
+                out.add(item);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TMDB trending failed: " + e.getMessage());
+        }
+        return out;
+    }
+
+    public static List<MediaItem> searchMedia(String query, int limit) {
+        List<MediaItem> out = new ArrayList<>();
+        if (query == null || query.trim().isEmpty() || limit <= 0
+                || BuildConfig.TMDB_API_KEY == null || BuildConfig.TMDB_API_KEY.isEmpty()) {
+            return out;
+        }
+
+        Map<String, Boolean> seen = new LinkedHashMap<>();
+        try {
+            String url = API_BASE + "/search/multi?api_key="
+                    + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8")
+                    + "&language=es-ES&include_adult=false&query="
+                    + URLEncoder.encode(query.trim(), "UTF-8")
+                    + "&page=1";
+
+            JSONObject root = new JSONObject(httpGet(url));
+            JSONArray results = root.optJSONArray("results");
+            if (results == null) {
+                return out;
+            }
+
+            for (int i = 0; i < results.length() && out.size() < limit; i++) {
+                JSONObject raw = results.optJSONObject(i);
+                if (raw == null) {
+                    continue;
+                }
+                String tmdbType = normalizeTmdbMediaType(raw.optString("media_type", ""));
+                MediaItem item = toHomeMediaItem(raw, tmdbType, false);
+                if (item == null) {
+                    continue;
+                }
+
+                String key = item.getMediaType() + "|" + item.getTmdbId();
+                if (seen.containsKey(key)) {
+                    continue;
+                }
+                seen.put(key, true);
+                out.add(item);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TMDB search failed: " + e.getMessage());
+        }
+
+        return out;
+    }
+
     // ─── Internos ─────────────────────────────────────────────────────────────
 
     private static String buildKey(MediaItem item) {
@@ -125,6 +236,12 @@ public class TmdbService {
                 && result.overview != null && !result.overview.trim().isEmpty()) {
             item.setSynopsis(result.overview.trim());
         }
+        if (result.tmdbId > 0) {
+            item.setTmdbId(result.tmdbId);
+        }
+        if (result.imdbId != null && !result.imdbId.trim().isEmpty()) {
+            item.setImdbId(result.imdbId.trim());
+        }
     }
 
     private static TmdbResult findMedia(MediaItem item) {
@@ -140,6 +257,134 @@ public class TmdbService {
             result = findByEndpoint(title, year, "multi");
         }
         return result;
+    }
+
+    private static List<MediaItem> fetchHomeItemsByEndpoint(String path, String forcedTmdbType, int limit) {
+        List<MediaItem> out = new ArrayList<>();
+        if (limit <= 0 || BuildConfig.TMDB_API_KEY == null || BuildConfig.TMDB_API_KEY.isEmpty()) {
+            return out;
+        }
+
+        try {
+            String url = API_BASE + path + "?api_key="
+                    + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8")
+                    + "&language=es-ES&page=1";
+            JSONObject root = new JSONObject(httpGet(url));
+            JSONArray results = root.optJSONArray("results");
+            if (results == null) {
+                return out;
+            }
+
+            for (int i = 0; i < results.length() && out.size() < limit; i++) {
+                JSONObject raw = results.optJSONObject(i);
+                if (raw == null) {
+                    continue;
+                }
+                MediaItem item = toHomeMediaItem(raw, forcedTmdbType, false);
+                if (item != null) {
+                    out.add(item);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TMDB list failed for " + path + ": " + e.getMessage());
+        }
+        return out;
+    }
+
+    private static MediaItem toHomeMediaItem(JSONObject raw, String tmdbType, boolean fetchExternalId) {
+        String type = normalizeTmdbMediaType(tmdbType);
+        if (!"movie".equals(type) && !"tv".equals(type)) {
+            return null;
+        }
+
+        int tmdbId = raw.optInt("id", 0);
+        if (tmdbId <= 0) {
+            return null;
+        }
+
+        String title = firstNonEmpty(raw.optString("title", ""), raw.optString("name", ""));
+        if (title.isEmpty()) {
+            return null;
+        }
+
+        String date = firstNonEmpty(raw.optString("release_date", ""), raw.optString("first_air_date", ""));
+        String year = "";
+        if (date.length() >= 4) {
+            year = date.substring(0, 4);
+        }
+
+        String posterPath = normalizeTmdbImagePath(raw.optString("poster_path", ""));
+        String posterUrl = posterPath.isEmpty() ? "" : IMAGE_BASE + posterPath;
+        String overview = raw.optString("overview", "");
+        double rating = raw.optDouble("vote_average", 0.0);
+
+        MediaItem item = new MediaItem(title, year, posterUrl, "", 0);
+        item.setSynopsis(overview);
+        item.setRating(rating);
+        item.setTmdbId(tmdbId);
+        item.setMediaType("movie".equals(type) ? "movies" : "tvshows");
+        item.setFuente("tmdb");
+        if (fetchExternalId) {
+            item.setImdbId(fetchExternalImdbId(type, tmdbId));
+        }
+        return item;
+    }
+
+    private static String normalizeTmdbMediaType(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String value = raw.trim().toLowerCase(Locale.ROOT);
+        if ("movie".equals(value)) return "movie";
+        if ("tv".equals(value)) return "tv";
+        return "";
+    }
+
+    private static String firstNonEmpty(String a, String b) {
+        if (a != null && !a.trim().isEmpty()) {
+            return a.trim();
+        }
+        if (b != null && !b.trim().isEmpty()) {
+            return b.trim();
+        }
+        return "";
+    }
+
+    private static List<MediaItem> mergeInterleavedAndTrim(List<MediaItem> first, List<MediaItem> second, int limit) {
+        List<MediaItem> out = new ArrayList<>();
+        if (limit <= 0) {
+            return out;
+        }
+        Map<String, Boolean> seen = new LinkedHashMap<>();
+
+        int i = 0;
+        while (out.size() < limit) {
+            boolean progressed = false;
+            if (first != null && i < first.size()) {
+                progressed = appendUnique(out, seen, first.get(i), limit) || progressed;
+            }
+            if (second != null && i < second.size()) {
+                progressed = appendUnique(out, seen, second.get(i), limit) || progressed;
+            }
+            if (!progressed && (first == null || i >= first.size()) && (second == null || i >= second.size())) {
+                break;
+            }
+            i++;
+        }
+        return out;
+    }
+
+    private static boolean appendUnique(List<MediaItem> out, Map<String, Boolean> seen, MediaItem item, int limit) {
+        if (item == null || out.size() >= limit) {
+            return false;
+        }
+        String key = item.getMediaType() + "|" + item.getTmdbId();
+        if (seen.containsKey(key)) {
+            return false;
+        }
+        seen.put(key, true);
+        out.add(item);
+        return true;
     }
 
     private static TmdbResult findByEndpoint(String title, String year, String endpoint) {
@@ -168,15 +413,87 @@ public class TmdbService {
             if (first == null) return null;
 
             TmdbResult result = new TmdbResult();
-            String posterPath = first.optString("poster_path", "");
+            String posterPath = normalizeTmdbImagePath(first.optString("poster_path", ""));
             if (!posterPath.isEmpty()) result.posterUrl = IMAGE_BASE + posterPath;
             result.overview = first.optString("overview", "");
+            result.tmdbId = first.optInt("id", 0);
+            result.tmdbMediaType = detectEndpointFromMediaType(endpoint, first.optString("media_type", ""));
+            if (result.tmdbId > 0 && result.tmdbMediaType != null) {
+                result.imdbId = fetchExternalImdbId(result.tmdbMediaType, result.tmdbId);
+            }
             return result;
 
         } catch (Exception e) {
             Log.w(TAG, "TMDB search failed: " + e.getMessage());
             return null;
         }
+    }
+
+    private static String detectEndpointFromMediaType(String endpoint, String mediaType) {
+        if ("movie".equals(endpoint) || "tv".equals(endpoint)) {
+            return endpoint;
+        }
+        String mt = mediaType == null ? "" : mediaType.trim().toLowerCase(Locale.ROOT);
+        if ("movie".equals(mt)) return "movie";
+        if ("tv".equals(mt)) return "tv";
+        return null;
+    }
+
+    private static String fetchExternalImdbId(String endpoint, int tmdbId) {
+        if (tmdbId <= 0 || (!"movie".equals(endpoint) && !"tv".equals(endpoint))) {
+            return "";
+        }
+        long now = System.currentTimeMillis();
+        if (now < externalIdsBlockedUntilMs) {
+            return "";
+        }
+
+        String cacheKey = endpoint + ":" + tmdbId;
+        synchronized (externalIdsCache) {
+            String cached = externalIdsCache.get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        try {
+            String url = API_BASE + "/" + endpoint + "/" + tmdbId + "/external_ids?api_key="
+                    + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8");
+            JSONObject root = new JSONObject(httpGet(url));
+            String imdb = normalizeImdbId(root.optString("imdb_id", ""));
+            if (!imdb.isEmpty()) {
+                synchronized (externalIdsCache) {
+                    externalIdsCache.put(cacheKey, imdb);
+                }
+            }
+            return imdb;
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? "" : e.getMessage();
+            if (message.contains("HTTP 429")) {
+                externalIdsBlockedUntilMs = System.currentTimeMillis() + EXTERNAL_IDS_429_COOLDOWN_MS;
+            }
+            Log.w(TAG, "TMDB external_ids failed: " + e.getMessage());
+            return "";
+        }
+    }
+
+    private static String normalizeImdbId(String raw) {
+        if (raw == null) return "";
+        String imdb = raw.trim();
+        if (imdb.matches("tt\\d+")) {
+            return imdb;
+        }
+        return "";
+    }
+
+    private static String normalizeTmdbImagePath(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String value = raw.trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+            return "";
+        }
+        return value;
     }
 
     private static String cleanTitle(String rawTitle) {

@@ -17,6 +17,7 @@ import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
+import sv.edu.catolica.rex.network.smart.SmartScraperEngine;
 import sv.edu.catolica.rex.ui.player.PlayerContenidoActivity;
 
 public class DetalleContenidoActivity extends AppCompatActivity {
@@ -30,8 +31,10 @@ public class DetalleContenidoActivity extends AppCompatActivity {
     private MediaItem mediaItem;
     private ArrayList<String> playUrls = new ArrayList<>();
     private final List<AllCalidadScraper.Season> seasonItems = new ArrayList<>();
+    private final SmartScraperEngine smartScraperEngine = new SmartScraperEngine();
     private EpisodeAdapter episodeAdapter;
     private boolean isSeriesContent = false;
+    private AllCalidadScraper.Episode firstSeriesEpisode;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +75,11 @@ public class DetalleContenidoActivity extends AppCompatActivity {
         loadDetail();
 
         btnPlay.setOnClickListener(v -> {
+            if (isSeriesContent) {
+                playFirstSeriesEpisode();
+                return;
+            }
+
             if (!playUrls.isEmpty()) {
                 String playTitle = mediaItem.getTitulo();
                 PlayerContenidoActivity.start(this, playUrls, playTitle);
@@ -91,13 +99,20 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                 int postId = mediaItem.getPostId();
                 String mediaType = mediaItem.getMediaType();
                 boolean isSeries = isSeriesType(mediaType);
+                if (!isSeries) {
+                    urls = smartScraperEngine.resolveMovieUrls(DetalleContenidoActivity.this, mediaItem);
+                } else if (postId <= 0) {
+                    urls = smartScraperEngine.resolveEpisodeUrls(DetalleContenidoActivity.this, mediaItem, 1, 1);
+                }
                 if (postId > 0) {
                     AllCalidadScraper.hit(postId, normalizePostType(mediaType));
                     if (isSeries) {
                         seasons = AllCalidadScraper.getSeasons(postId);
                     } else {
-                        AllCalidadScraper.PlayerData player = AllCalidadScraper.getPlayer(postId);
-                        urls = AllCalidadScraper.getPlayableUrls(player);
+                        if (urls == null || urls.isEmpty()) {
+                            AllCalidadScraper.PlayerData player = AllCalidadScraper.getPlayer(postId);
+                            urls = AllCalidadScraper.getPlayableUrls(player);
+                        }
                     }
                 }
 
@@ -120,12 +135,6 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                     isSeriesContent = finalIsSeries;
                     bindSeasons(finalSeasons, finalIsSeries);
 
-                    if (finalIsSeries) {
-                        btnPlay.setVisibility(View.GONE);
-                    } else {
-                        btnPlay.setVisibility(View.VISIBLE);
-                    }
-
                     playUrls.clear();
                     playUrls.addAll(finalUrls);
                     updatePlayButtonState();
@@ -145,12 +154,21 @@ public class DetalleContenidoActivity extends AppCompatActivity {
 
     private void bindSeasons(List<AllCalidadScraper.Season> seasons, boolean showEpisodes) {
         seasonItems.clear();
+        firstSeriesEpisode = null;
         if (seasons != null) {
             for (AllCalidadScraper.Season season : seasons) {
                 if (season == null || season.episodes == null || season.episodes.isEmpty()) {
                     continue;
                 }
                 seasonItems.add(season);
+                if (firstSeriesEpisode == null) {
+                    for (AllCalidadScraper.Episode episode : season.episodes) {
+                        if (episode != null && episode.id > 0) {
+                            firstSeriesEpisode = episode;
+                            break;
+                        }
+                    }
+                }
             }
         }
         episodeAdapter.setSeasons(seasonItems);
@@ -167,17 +185,26 @@ public class DetalleContenidoActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                AllCalidadScraper.hit(episode.id, "episodes");
-                List<String> urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
+                List<String> urls = smartScraperEngine.resolveEpisodeUrls(
+                        DetalleContenidoActivity.this,
+                        mediaItem,
+                        episode.seasonNumber,
+                        episode.episodeNumber
+                );
+                if (urls == null || urls.isEmpty()) {
+                    AllCalidadScraper.hit(episode.id, "episodes");
+                    urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
+                }
                 String label = formatEpisodeLabel(episode);
+                final List<String> finalUrls = urls;
 
                 runOnUiThread(() -> {
-                    if (urls == null || urls.isEmpty()) {
+                    if (finalUrls == null || finalUrls.isEmpty()) {
                         Toast.makeText(DetalleContenidoActivity.this, "No hay servidores para " + label, Toast.LENGTH_SHORT).show();
                         return;
                     }
 
-                    ArrayList<String> playList = new ArrayList<>(urls);
+                    ArrayList<String> playList = new ArrayList<>(finalUrls);
                     String playTitle = mediaItem.getTitulo() + " - " + label;
                     PlayerContenidoActivity.startEpisode(
                             DetalleContenidoActivity.this,
@@ -199,13 +226,35 @@ public class DetalleContenidoActivity extends AppCompatActivity {
         }).start();
     }
 
+    private void playFirstSeriesEpisode() {
+        if (firstSeriesEpisode == null || firstSeriesEpisode.id <= 0) {
+            Toast.makeText(this, "No hay episodios disponibles", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        loadEpisodeServers(firstSeriesEpisode);
+    }
+
     private void updatePlayButtonState() {
+        btnPlay.setVisibility(View.VISIBLE);
+
         if (isSeriesContent) {
-            btnPlay.setVisibility(View.GONE);
+            if (firstSeriesEpisode == null) {
+                if (playUrls.isEmpty()) {
+                    btnPlay.setEnabled(false);
+                    btnPlay.setText("No disponible");
+                    return;
+                }
+
+                btnPlay.setEnabled(true);
+                btnPlay.setText("Reproducir T1:E1");
+                return;
+            }
+
+            btnPlay.setEnabled(true);
+            btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
             return;
         }
 
-        btnPlay.setVisibility(View.VISIBLE);
         if (playUrls.isEmpty()) {
             btnPlay.setEnabled(false);
             btnPlay.setText("No disponible");
