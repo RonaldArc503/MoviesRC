@@ -1,8 +1,10 @@
 package sv.edu.catolica.rex.ui.player;
 
+import android.app.UiModeManager;
 import android.content.pm.ActivityInfo;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -48,6 +50,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 198d;
     private static final double NEXT_EPISODE_HIDE_HYSTERESIS_SEC = 12d;
     private static final double AUTO_NEXT_REMAINING_SEC = 1.2d;
+    private static final String NEXT_EPISODE_LABEL_BASE = "Siguiente episodio";
 
     private WebView webView;
     private ProgressBar progressBar;
@@ -73,6 +76,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private boolean isTransitioningToNextEpisode = false;
     private boolean autoNextTriggeredForCurrent = false;
     private boolean resumed = false;
+    private boolean isTvDevice = false;
 
     private NextEpisodeInfo nextEpisodeInfo;
 
@@ -146,6 +150,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         enterImmersiveMode();
         setContentView(R.layout.activity_player_contenido);
+        isTvDevice = isTelevision();
 
         webView = findViewById(R.id.webview);
         progressBar = findViewById(R.id.progressBar);
@@ -202,6 +207,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (nextEpisodeButton == null) {
             return;
         }
+        nextEpisodeButton.setText(NEXT_EPISODE_LABEL_BASE);
         nextEpisodeButton.setVisibility(View.GONE);
         nextEpisodeButton.setOnClickListener(v -> playNextEpisode(false));
     }
@@ -381,7 +387,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
             double trigger = resolveNextButtonTrigger(duration);
             if (remaining <= trigger && remaining > AUTO_NEXT_REMAINING_SEC) {
-                showNextEpisodeButton();
+                showNextEpisodeButton(remaining);
             } else if (remaining > trigger + NEXT_EPISODE_HIDE_HYSTERESIS_SEC) {
                 hideNextEpisodeButton(false);
             }
@@ -396,8 +402,20 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         return Math.min(NEXT_EPISODE_BUTTON_REMAINING_SEC, Math.max(20d, durationSec - 5d));
     }
 
-    private void showNextEpisodeButton() {
-        if (nextEpisodeButton == null || nextEpisodeInfo == null || nextButtonVisible || isTransitioningToNextEpisode) {
+    private void showNextEpisodeButton(double remainingSec) {
+        if (nextEpisodeButton == null || nextEpisodeInfo == null || isTransitioningToNextEpisode) {
+            return;
+        }
+
+        int countdown = (int) Math.ceil(Math.max(0d, remainingSec));
+        String code = formatEpisodeCode(nextEpisodeInfo.seasonNumber, nextEpisodeInfo.episodeNumber);
+        if (countdown > 0) {
+            nextEpisodeButton.setText("Siguiente " + code + " (" + countdown + "s)");
+        } else {
+            nextEpisodeButton.setText("Siguiente " + code);
+        }
+
+        if (nextButtonVisible && nextEpisodeButton.getVisibility() == View.VISIBLE) {
             return;
         }
 
@@ -405,6 +423,9 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         nextEpisodeButton.setVisibility(View.VISIBLE);
         nextEpisodeButton.setAlpha(0f);
         nextEpisodeButton.animate().alpha(1f).setDuration(180L).start();
+        if (isTvDevice) {
+            nextEpisodeButton.requestFocus();
+        }
     }
 
     private void hideNextEpisodeButton(boolean immediate) {
@@ -416,6 +437,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
 
         nextButtonVisible = false;
+        nextEpisodeButton.setText(NEXT_EPISODE_LABEL_BASE);
         if (immediate) {
             nextEpisodeButton.animate().cancel();
             nextEpisodeButton.setAlpha(0f);
@@ -750,5 +772,15 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                             | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
             );
         }
+    }
+
+    private boolean isTelevision() {
+        UiModeManager uiModeManager = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
+        if (uiModeManager != null &&
+                uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+            return true;
+        }
+        int uiMode = getResources().getConfiguration().uiMode;
+        return (uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 }

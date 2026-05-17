@@ -1,5 +1,8 @@
 package sv.edu.catolica.rex.ui.detalle;
 
+import android.app.UiModeManager;
+import android.content.Context;
+import android.content.res.Configuration;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -22,6 +25,7 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
     private final List<RowItem> rows = new ArrayList<>();
     private final OnEpisodeClickListener listener;
+    private boolean isTvDevice = false;
 
     private static class RowItem {
         int type;
@@ -68,11 +72,15 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     @Override
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         LayoutInflater inflater = LayoutInflater.from(parent.getContext());
+        if (!isTvDevice) {
+            isTvDevice = detectTvDevice(parent.getContext());
+        }
         if (viewType == TYPE_SEASON_HEADER) {
             View view = inflater.inflate(R.layout.item_season_header, parent, false);
             return new SeasonHeaderViewHolder(view);
         }
-        View view = inflater.inflate(R.layout.item_episode, parent, false);
+        int episodeLayout = isTvDevice ? R.layout.item_episode_tv : R.layout.item_episode;
+        View view = inflater.inflate(episodeLayout, parent, false);
         return new EpisodeViewHolder(view);
     }
 
@@ -129,5 +137,18 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             tvCode = itemView.findViewById(R.id.tv_episode_code);
             tvTitle = itemView.findViewById(R.id.tv_episode_title);
         }
+    }
+
+    private boolean detectTvDevice(Context context) {
+        if (context == null) {
+            return false;
+        }
+        UiModeManager uiModeManager = (UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
+        if (uiModeManager != null &&
+                uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+            return true;
+        }
+        int uiMode = context.getResources().getConfiguration().uiMode;
+        return (uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 }

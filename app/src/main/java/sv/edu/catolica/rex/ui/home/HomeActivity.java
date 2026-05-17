@@ -4,6 +4,9 @@ import android.app.UiModeManager;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.os.Bundle;
+import android.view.KeyEvent;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
@@ -79,12 +82,67 @@ public class HomeActivity extends AppCompatActivity {
             return false;
         });
 
+        if (isTv) {
+            setupTvSearchBehavior();
+        }
+
         loadHomeData(false);
     }
 
     private boolean isTvDevice() {
         UiModeManager mgr = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
         return mgr != null && mgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
+    }
+
+    private void setupTvSearchBehavior() {
+        if (searchView == null) {
+            return;
+        }
+
+        searchView.setFocusable(true);
+        searchView.setFocusableInTouchMode(true);
+        searchView.setOnClickListener(v -> activateTvSearchInput());
+        searchView.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) {
+                return false;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                activateTvSearchInput();
+                return true;
+            }
+            return false;
+        });
+        searchView.setOnFocusChangeListener((v, hasFocus) -> {
+            v.animate()
+                    .scaleX(hasFocus ? 1.04f : 1.0f)
+                    .scaleY(hasFocus ? 1.04f : 1.0f)
+                    .alpha(hasFocus ? 1.0f : 0.92f)
+                    .setDuration(160L)
+                    .start();
+            v.setSelected(hasFocus);
+        });
+    }
+
+    private void activateTvSearchInput() {
+        if (searchView == null) {
+            return;
+        }
+
+        searchView.setIconified(false);
+        searchView.requestFocus();
+
+        EditText searchText = searchView.findViewById(androidx.appcompat.R.id.search_src_text);
+        if (searchText != null) {
+            searchText.setFocusable(true);
+            searchText.setFocusableInTouchMode(true);
+            searchText.requestFocus();
+            searchText.setSelection(searchText.getText() != null ? searchText.getText().length() : 0);
+
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(searchText, InputMethodManager.SHOW_IMPLICIT);
+            }
+        }
     }
 
     private void loadHomeData() { loadHomeData(false); }

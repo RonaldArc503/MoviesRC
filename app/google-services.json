@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "484560239995",
+    "firebase_url": "https://rexpets-default-rtdb.firebaseio.com",
+    "project_id": "rexpets",
+    "storage_bucket": "rexpets.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:484560239995:android:5595cf6caf384b3fcdd1de",
+        "android_client_info": {
+          "package_name": "sv.edu.catolica.rex"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "484560239995-8f5dajc1trhcq05l2lpbe9jcmckdjgo7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "sv.edu.catolica.rex",
+            "certificate_hash": "ac713044063a30bd998f9bb461cb27c79789b4a7"
+          }
+        },
+        {
+          "client_id": "484560239995-d4ucmks42bujt3hu0apb9ffp14m17ft9.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAyR-cGeO1UkljR_2W6QOI81Z-u-6brfkM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "484560239995-d4ucmks42bujt3hu0apb9ffp14m17ft9.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

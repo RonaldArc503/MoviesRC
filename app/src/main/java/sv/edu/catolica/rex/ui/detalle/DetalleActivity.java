@@ -60,6 +60,7 @@ public class DetalleActivity extends AppCompatActivity {
     private final List<AllCalidadScraper.Season> seasonItems = new ArrayList<>();
     private EpisodeAdapter episodeAdapter;
     private boolean isSeries = false;
+    private AllCalidadScraper.Episode firstSeriesEpisode;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -204,16 +205,15 @@ public class DetalleActivity extends AppCompatActivity {
 
                     bindSeasons(finalSeasons, finalIsSeries);
 
+                    btnPlay.setVisibility(View.VISIBLE);
                     if (finalIsSeries) {
-                        btnPlay.setVisibility(View.GONE);
                         showEpisodesSection();
-                    } else {
-                        btnPlay.setVisibility(View.VISIBLE);
                     }
 
                     playUrls.clear();
                     playUrls.addAll(finalUrls);
                     updatePlayButtonState();
+                    requestPlayFocusIfTv();
                 });
 
             } catch (Exception e) {
@@ -231,12 +231,21 @@ public class DetalleActivity extends AppCompatActivity {
 
     private void bindSeasons(List<AllCalidadScraper.Season> seasons, boolean showEpisodes) {
         seasonItems.clear();
+        firstSeriesEpisode = null;
         if (seasons != null) {
             for (AllCalidadScraper.Season season : seasons) {
                 if (season == null || season.episodes == null || season.episodes.isEmpty()) {
                     continue;
                 }
                 seasonItems.add(season);
+                if (firstSeriesEpisode == null) {
+                    for (AllCalidadScraper.Episode episode : season.episodes) {
+                        if (episode != null && episode.id > 0) {
+                            firstSeriesEpisode = episode;
+                            break;
+                        }
+                    }
+                }
             }
         }
         episodeAdapter.setSeasons(seasonItems);
@@ -300,12 +309,20 @@ public class DetalleActivity extends AppCompatActivity {
     }
 
     private void updatePlayButtonState() {
+        btnPlay.setVisibility(View.VISIBLE);
+
         if (isSeries) {
-            btnPlay.setVisibility(View.GONE);
+            if (firstSeriesEpisode == null) {
+                btnPlay.setEnabled(false);
+                btnPlay.setText("No disponible");
+                return;
+            }
+
+            btnPlay.setEnabled(true);
+            btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
             return;
         }
 
-        btnPlay.setVisibility(View.VISIBLE);
         if (playUrls.isEmpty()) {
             btnPlay.setEnabled(false);
             btnPlay.setText("No disponible");
@@ -320,6 +337,11 @@ public class DetalleActivity extends AppCompatActivity {
         // Botón reproducir
         if (btnPlay != null) {
             btnPlay.setOnClickListener(v -> {
+                if (isSeries) {
+                    playFirstSeriesEpisode();
+                    return;
+                }
+
                 if (!playUrls.isEmpty()) {
                     String playTitle = mediaItem.getTitulo();
                     PlayerContenidoActivity.start(this, playUrls, playTitle);
@@ -358,7 +380,24 @@ public class DetalleActivity extends AppCompatActivity {
             tvSeasonSelector.setOnClickListener(v -> showSeasonPicker());
         }
     }
+    private void playFirstSeriesEpisode() {
+        if (firstSeriesEpisode == null || firstSeriesEpisode.id <= 0) {
+            Toast.makeText(this, "No hay episodios disponibles", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        loadEpisodeServers(firstSeriesEpisode);
+    }
 
+    private void requestPlayFocusIfTv() {
+        if (!isTV || btnPlay == null || !btnPlay.isShown()) {
+            return;
+        }
+        btnPlay.post(() -> {
+            if (btnPlay.isShown() && btnPlay.isEnabled()) {
+                btnPlay.requestFocus();
+            }
+        });
+    }
     private void showSeasonPicker() {
         // TODO: mostrar diálogo con selector de temporada
         Toast.makeText(this, "Selector de temporada - Próximamente", Toast.LENGTH_SHORT).show();
@@ -402,3 +441,5 @@ public class DetalleActivity extends AppCompatActivity {
         context.startActivity(intent);
     }
 }
+
+
