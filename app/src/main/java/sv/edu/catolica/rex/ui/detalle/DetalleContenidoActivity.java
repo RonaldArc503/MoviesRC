@@ -103,6 +103,7 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                     urls = smartScraperEngine.resolveMovieUrls(DetalleContenidoActivity.this, mediaItem);
                 } else if (postId <= 0) {
                     urls = smartScraperEngine.resolveEpisodeUrls(DetalleContenidoActivity.this, mediaItem, 1, 1);
+                    seasons = TmdbService.getTvSeasonsFallback(mediaItem);
                 }
                 if (postId > 0) {
                     AllCalidadScraper.hit(postId, normalizePostType(mediaType));
@@ -192,8 +193,10 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                         episode.episodeNumber
                 );
                 if (urls == null || urls.isEmpty()) {
-                    AllCalidadScraper.hit(episode.id, "episodes");
-                    urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
+                    if (mediaItem.getPostId() > 0) {
+                        AllCalidadScraper.hit(episode.id, "episodes");
+                        urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
+                    }
                 }
                 String label = formatEpisodeLabel(episode);
                 final List<String> finalUrls = urls;

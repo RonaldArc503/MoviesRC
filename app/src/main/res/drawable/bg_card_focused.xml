@@ -1,21 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Overlay de foco para cards en TV.
-    Se aplica como foreground del CardView cuando el ítem está focusado.
-    Muestra un borde blanco brillante estilo HBO Max.
--->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-
-    <!-- Sin relleno sólido: solo queremos el borde -->
-    <solid android:color="@android:color/transparent" />
-
-    <!-- Borde blanco puro, 3dp de grosor -->
     <stroke
-        android:width="3dp"
-        android:color="#FFFFFF" />
-
-    <!-- Mismo radio de esquina que la card (14dp) -->
-    <corners android:radius="14dp" />
-
+        android:width="2dp"
+        android:color="#E63540" />
+    <corners android:radius="10dp" />
+    <solid android:color="@android:color/transparent" />
 </shape>

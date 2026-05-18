@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ProgressBar;
@@ -46,6 +47,13 @@ public class HomeActivity extends AppCompatActivity {
     private SearchView   searchView;
     private HomeAdapter  adapter;
     private boolean      isTv;
+    private List<Section> homeSectionsSnapshot = new ArrayList<>();
+
+    private View menuHome;
+    private View menuBuscar;
+    private View menuCategorias;
+    private View menuSeries;
+    private View menuDoramas;
 
     private boolean isSearchMode          = false;
     private boolean suppressQueryListener = false;
@@ -65,29 +73,32 @@ public class HomeActivity extends AppCompatActivity {
         searchView  = findViewById(R.id.search_view);
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
-       adapter = new HomeAdapter(this, new ArrayList<>(),
-        item -> DetalleActivity.start(HomeActivity.this, item), isTv);
+        adapter = new HomeAdapter(this, new ArrayList<>(),
+                item -> DetalleActivity.start(HomeActivity.this, item), isTv);
         rvSections.setAdapter(adapter);
 
-        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
-            @Override public boolean onQueryTextSubmit(String query) {
-                performSearch(query); return true;
-            }
-            @Override public boolean onQueryTextChange(String newText) {
-                if (suppressQueryListener) return false;
-                String text = newText == null ? "" : newText.trim();
-                if (text.isEmpty() && isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
-                return false;
-            }
-        });
+        if (searchView != null) {
+            searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+                @Override public boolean onQueryTextSubmit(String query) {
+                    performSearch(query); return true;
+                }
+                @Override public boolean onQueryTextChange(String newText) {
+                    if (suppressQueryListener) return false;
+                    String text = newText == null ? "" : newText.trim();
+                    if (text.isEmpty() && isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
+                    return false;
+                }
+            });
 
-        searchView.setOnCloseListener(() -> {
-            if (isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
-            return false;
-        });
+            searchView.setOnCloseListener(() -> {
+                if (isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
+                return false;
+            });
+        }
 
         if (isTv) {
             setupTvSearchBehavior();
+            setupTvSideMenu();
         }
 
         loadHomeData(false);
@@ -127,6 +138,66 @@ public class HomeActivity extends AppCompatActivity {
         });
     }
 
+    private void setupTvSideMenu() {
+        menuHome = findViewById(R.id.menu_home);
+        menuBuscar = findViewById(R.id.menu_buscar);
+        menuCategorias = findViewById(R.id.menu_categorias);
+        menuSeries = findViewById(R.id.menu_series);
+        menuDoramas = findViewById(R.id.menu_doramas);
+
+        if (menuHome == null || menuBuscar == null || menuCategorias == null
+                || menuSeries == null || menuDoramas == null) {
+            return;
+        }
+
+        menuHome.setOnClickListener(v -> {
+            setTvMenuSelected(menuHome);
+            if (isSearchMode) {
+                exitSearchModeAndRestoreHome();
+                return;
+            }
+            if (!homeSectionsSnapshot.isEmpty()) {
+                showSections(copySections(homeSectionsSnapshot));
+            } else {
+                loadHomeData(false);
+            }
+        });
+
+        menuBuscar.setOnClickListener(v -> {
+            setTvMenuSelected(menuBuscar);
+            activateTvSearchInput();
+        });
+
+        menuCategorias.setOnClickListener(v -> {
+            setTvMenuSelected(menuCategorias);
+            showSections(buildCategorySections(homeSectionsSnapshot));
+        });
+
+        menuSeries.setOnClickListener(v -> {
+            setTvMenuSelected(menuSeries);
+            showSections(filterSectionsByType(homeSectionsSnapshot, true));
+        });
+
+        menuDoramas.setOnClickListener(v -> {
+            setTvMenuSelected(menuDoramas);
+            showSections(filterSectionsDoramas(homeSectionsSnapshot));
+        });
+
+        setTvMenuSelected(menuHome);
+    }
+
+    private void setTvMenuSelected(View selectedItem) {
+        View[] items = new View[]{menuHome, menuBuscar, menuCategorias, menuSeries, menuDoramas};
+        for (View item : items) {
+            if (item == null) {
+                continue;
+            }
+            boolean isSelected = item == selectedItem;
+            item.setSelected(isSelected);
+            item.setActivated(isSelected);
+        }
+    }
+
     private void activateTvSearchInput() {
         if (searchView == null) {
             return;
@@ -157,6 +228,7 @@ public class HomeActivity extends AppCompatActivity {
 
         if (cached != null && !cached.isEmpty()) {
             progressBar.setVisibility(ProgressBar.GONE);
+            homeSectionsSnapshot = copySections(cached);
             showSections(cached);
             if (hasTmdbHomeSections(cached)) {
                 return;
@@ -220,6 +292,7 @@ public class HomeActivity extends AppCompatActivity {
 
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || isSearchMode) return;
+                    homeSectionsSnapshot = copySections(sections);
                     showSections(sections);
                     progressBar.setVisibility(ProgressBar.GONE);
                     maybeWarnMissingTmdbKey();
@@ -486,12 +559,14 @@ public class HomeActivity extends AppCompatActivity {
             if (item == null) continue;
             MediaItem c = new MediaItem(item.getTitulo(), item.getAnio(),
                     item.getImagen(), item.getDetailUrl(), 0);
+            c.setBackdrop(item.getBackdrop());
             c.setFuente(item.getFuente());
             c.setMediaType(item.getMediaType());
             c.setPostId(item.getPostId());
             c.setSynopsis(item.getSynopsis());
             c.setDublado(item.isDublado());
             c.setRating(item.getRating());
+            c.setProgress(item.getProgress());
             c.setTmdbId(item.getTmdbId());
             c.setImdbId(item.getImdbId());
             copy.add(c);
@@ -503,5 +578,124 @@ public class HomeActivity extends AppCompatActivity {
         adapter = new HomeAdapter(this, sections,
                 item -> DetalleActivity.start(HomeActivity.this, item), isTv);
         rvSections.setAdapter(adapter);
+    }
+
+    private List<Section> buildCategorySections(List<Section> sourceSections) {
+        List<MediaItem> movies = new ArrayList<>();
+        List<MediaItem> series = new ArrayList<>();
+        List<MediaItem> doramas = new ArrayList<>();
+
+        if (sourceSections != null) {
+            for (Section section : sourceSections) {
+                if (section == null || section.getItems() == null) {
+                    continue;
+                }
+                for (MediaItem item : section.getItems()) {
+                    if (item == null) {
+                        continue;
+                    }
+                    String type = item.getMediaType() == null ? "" : item.getMediaType().toLowerCase(Locale.ROOT);
+                    String title = item.getTitulo() == null ? "" : item.getTitulo().toLowerCase(Locale.ROOT);
+                    if (isDoramasType(type, title)) {
+                        doramas.add(item);
+                    } else if (isSeriesType(type)) {
+                        series.add(item);
+                    } else {
+                        movies.add(item);
+                    }
+                }
+            }
+        }
+
+        List<Section> result = new ArrayList<>();
+        if (!movies.isEmpty()) {
+            result.add(new Section("Peliculas", movies));
+        }
+        if (!series.isEmpty()) {
+            result.add(new Section("Series", series));
+        }
+        if (!doramas.isEmpty()) {
+            result.add(new Section("Doramas", doramas));
+        }
+        if (result.isEmpty()) {
+            result.add(new Section("Categorias", new ArrayList<>()));
+        }
+        return result;
+    }
+
+    private List<Section> filterSectionsByType(List<Section> sourceSections, boolean seriesOnly) {
+        List<Section> result = new ArrayList<>();
+        if (sourceSections == null) {
+            return result;
+        }
+
+        for (Section section : sourceSections) {
+            if (section == null || section.getItems() == null) {
+                continue;
+            }
+            List<MediaItem> filtered = new ArrayList<>();
+            for (MediaItem item : section.getItems()) {
+                if (item == null) {
+                    continue;
+                }
+                String type = item.getMediaType() == null ? "" : item.getMediaType().toLowerCase(Locale.ROOT);
+                if (seriesOnly && isSeriesType(type)) {
+                    filtered.add(item);
+                }
+            }
+            if (!filtered.isEmpty()) {
+                result.add(new Section(section.getTitle(), filtered));
+            }
+        }
+
+        if (result.isEmpty()) {
+            result.add(new Section("Series", new ArrayList<>()));
+        }
+        return result;
+    }
+
+    private List<Section> filterSectionsDoramas(List<Section> sourceSections) {
+        List<Section> result = new ArrayList<>();
+        if (sourceSections == null) {
+            return result;
+        }
+
+        for (Section section : sourceSections) {
+            if (section == null || section.getItems() == null) {
+                continue;
+            }
+            List<MediaItem> filtered = new ArrayList<>();
+            for (MediaItem item : section.getItems()) {
+                if (item == null) {
+                    continue;
+                }
+                String type = item.getMediaType() == null ? "" : item.getMediaType().toLowerCase(Locale.ROOT);
+                String title = item.getTitulo() == null ? "" : item.getTitulo().toLowerCase(Locale.ROOT);
+                if (isDoramasType(type, title)) {
+                    filtered.add(item);
+                }
+            }
+            if (!filtered.isEmpty()) {
+                result.add(new Section(section.getTitle(), filtered));
+            }
+        }
+
+        if (result.isEmpty()) {
+            result.add(new Section("Doramas", new ArrayList<>()));
+        }
+        return result;
+    }
+
+    private boolean isSeriesType(String type) {
+        return "tvshows".equals(type) || "animes".equals(type)
+                || "series".equals(type) || "tv".equals(type);
+    }
+
+    private boolean isDoramasType(String type, String title) {
+        return type.contains("dorama")
+                || title.contains("dorama")
+                || title.contains("k-drama")
+                || title.contains("kdrama")
+                || title.contains("drama coreano");
     }
 }

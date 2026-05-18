@@ -47,6 +47,16 @@ abstract class BaseSmartProvider implements SmartProvider {
             }
         }
 
+        // Xupalace often exposes playable links through JS handlers like:
+        // go_to_playerVast('https://hglink.to/e/....', ...)
+        for (String jsPlayerUrl : extractPlayerActionUrls(html)) {
+            if (isStreamUrl(jsPlayerUrl)) {
+                streams.add(jsPlayerUrl);
+            } else if (isHostUrl(jsPlayerUrl, preferredHosts)) {
+                hosts.add(jsPlayerUrl);
+            }
+        }
+
         for (String iframe : extractIframeUrls(html)) {
             if (isStreamUrl(iframe)) {
                 streams.add(iframe);
@@ -196,6 +206,37 @@ abstract class BaseSmartProvider implements SmartProvider {
         while (cleanMatcher.find()) {
             String url = normalizeUrl(cleanMatcher.group());
             if (!url.isEmpty()) out.add(url);
+        }
+
+        return new ArrayList<>(out);
+    }
+
+    protected static List<String> extractPlayerActionUrls(String html) {
+        Set<String> out = new LinkedHashSet<>();
+        if (html == null || html.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        Pattern vastAction = Pattern.compile(
+                "go_to_playerVast\\(\\s*['\"](https?://[^'\"]+)['\"]",
+                Pattern.CASE_INSENSITIVE);
+        Matcher vastMatcher = vastAction.matcher(html);
+        while (vastMatcher.find()) {
+            String url = normalizeUrl(vastMatcher.group(1));
+            if (!url.isEmpty()) {
+                out.add(url);
+            }
+        }
+
+        Pattern plainAction = Pattern.compile(
+                "go_to_player\\(\\s*['\"](https?://[^'\"]+)['\"]",
+                Pattern.CASE_INSENSITIVE);
+        Matcher plainMatcher = plainAction.matcher(html);
+        while (plainMatcher.find()) {
+            String url = normalizeUrl(plainMatcher.group(1));
+            if (!url.isEmpty()) {
+                out.add(url);
+            }
         }
 
         return new ArrayList<>(out);

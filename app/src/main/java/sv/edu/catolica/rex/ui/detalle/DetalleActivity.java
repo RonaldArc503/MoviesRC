@@ -131,6 +131,8 @@ public class DetalleActivity extends AppCompatActivity {
                 getSupportActionBar().setDisplayShowTitleEnabled(false);
             }
             toolbar.setNavigationOnClickListener(v -> onBackPressed());
+        } else if (getSupportActionBar() != null) {
+            getSupportActionBar().hide();
         }
     }
 
@@ -151,12 +153,18 @@ public class DetalleActivity extends AppCompatActivity {
         String synopsis = mediaItem.getSynopsis();
         tvSynopsis.setText((synopsis != null && !synopsis.isEmpty()) ? synopsis : "Cargando sinopsis...");
 
-        if (ivBackdrop != null && mediaItem.getImagen() != null) {
-            Glide.with(this)
-                .load(mediaItem.getImagen())
-                .placeholder(R.drawable.placeholder_poster)
-                .error(R.drawable.placeholder_poster)
-                .into(ivBackdrop);
+        if (ivBackdrop != null) {
+            String toLoad = mediaItem.getImagen();
+            if (isTV && mediaItem.getBackdrop() != null && !mediaItem.getBackdrop().isEmpty()) {
+                toLoad = mediaItem.getBackdrop();
+            }
+            if (toLoad != null && !toLoad.isEmpty()) {
+                Glide.with(this)
+                        .load(toLoad)
+                        .placeholder(R.drawable.placeholder_poster)
+                        .error(R.drawable.placeholder_poster)
+                        .into(ivBackdrop);
+            }
         }
 
         // Badges
@@ -189,6 +197,7 @@ public class DetalleActivity extends AppCompatActivity {
                 } else if (postId <= 0) {
                     // Non-AllCalidad series won't have seasons/episode ids; at least try S01E01 via smart providers.
                     urls = smartScraperEngine.resolveEpisodeUrls(DetalleActivity.this, mediaItem, 1, 1);
+                    seasons = TmdbService.getTvSeasonsFallback(mediaItem);
                 }
 
                 if (postId > 0) {
@@ -293,8 +302,10 @@ public class DetalleActivity extends AppCompatActivity {
                         episode.episodeNumber
                 );
                 if (urls == null || urls.isEmpty()) {
-                    AllCalidadScraper.hit(episode.id, "episodes");
-                    urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
+                    if (mediaItem.getPostId() > 0) {
+                        AllCalidadScraper.hit(episode.id, "episodes");
+                        urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
+                    }
                 }
                 String label = formatEpisodeLabel(episode);
                 final List<String> finalUrls = urls;
@@ -360,6 +371,10 @@ public class DetalleActivity extends AppCompatActivity {
     }
 
     private void setupListeners() {
+        if (isTV) {
+            setupTvFocusStates();
+        }
+
         // Botón reproducir
         if (btnPlay != null) {
             btnPlay.setOnClickListener(v -> {
@@ -415,6 +430,39 @@ public class DetalleActivity extends AppCompatActivity {
             tvSeasonSelector.setOnClickListener(v -> showSeasonPicker());
         }
     }
+
+    private void setupTvFocusStates() {
+        if (btnPlay != null) {
+            btnPlay.setOnFocusChangeListener((v, hasFocus) -> {
+                v.setSelected(hasFocus);
+                v.animate()
+                        .scaleX(hasFocus ? 1.06f : 1.0f)
+                        .scaleY(hasFocus ? 1.06f : 1.0f)
+                        .setDuration(150L)
+                        .start();
+            });
+        }
+
+        if (btnMyList != null) {
+            btnMyList.setOnFocusChangeListener((v, hasFocus) -> {
+                v.setSelected(hasFocus);
+                v.animate()
+                        .scaleX(hasFocus ? 1.05f : 1.0f)
+                        .scaleY(hasFocus ? 1.05f : 1.0f)
+                        .setDuration(150L)
+                        .start();
+            });
+        }
+
+        if (ivBack != null) {
+            ivBack.setOnFocusChangeListener((v, hasFocus) -> v.animate()
+                    .scaleX(hasFocus ? 1.07f : 1.0f)
+                    .scaleY(hasFocus ? 1.07f : 1.0f)
+                    .setDuration(150L)
+                    .start());
+        }
+    }
+
     private void playFirstSeriesEpisode() {
         if (firstSeriesEpisode == null || firstSeriesEpisode.id <= 0) {
             Toast.makeText(this, "No hay episodios disponibles", Toast.LENGTH_SHORT).show();
@@ -430,6 +478,7 @@ public class DetalleActivity extends AppCompatActivity {
         btnPlay.post(() -> {
             if (btnPlay.isShown() && btnPlay.isEnabled()) {
                 btnPlay.requestFocus();
+                btnPlay.setSelected(true);
             }
         });
     }

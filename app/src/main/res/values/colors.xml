@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+
     <color name="purple_500">#E50914</color>
     <color name="purple_700">#B20710</color>
 
@@ -11,11 +10,31 @@
     <color name="surfaceCardAlt">#222235</color>
     <color name="searchSurface">#16162A</color>
     <color name="strokeSoft">#2E2E46</color>
-    <color name="textPrimary">#F5F5F7</color>
-    <color name="textSecondary">#B8B8C7</color>
-    <color name="textMuted">#8C8CA3</color>
-    <color name="accentRed">#E50914</color>
-    <color name="accentRedDark">#A8060F</color>
+
     <color name="accentGold">#F5C451</color>
     <color name="bg_dark">#121212</color>
+
+    <!-- Paleta base Netflix-dark -->
+    <color name="rexBackground">#0A0C10</color>
+    <color name="rexSurface">#0E1119</color>
+    <color name="rexCard">#161A24</color>
+    <color name="rexBorder">#1E2330</color>
+
+    <!-- Acento rojo REX -->
+    <color name="accentRed">#E63540</color>
+    <color name="accentRedDark">#C42830</color>
+    <color name="accentRedLight">#FF4A54</color>
+
+    <!-- Texto -->
+    <color name="textPrimary">#FFFFFF</color>
+    <color name="textSecondary">#D4D6DE</color>
+    <color name="textMuted">#8A8F9E</color>
+    <color name="textHint">#5A5F70</color>
+
+    <!-- Rating dorado -->
+    <color name="ratingGold">#FFC800</color>
+
+    <!-- Colores legacy (para no romper referencias existentes) -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
 </resources>

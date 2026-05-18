@@ -25,7 +25,7 @@ public class TmdbService {
 
     private static final String TAG        = "TmdbService";
     private static final String API_BASE   = "https://api.themoviedb.org/3";
-    private static final String IMAGE_BASE = "https://image.tmdb.org/t/p/w500";
+    private static final String IMAGE_BASE = "https://image.tmdb.org/t/p/original";
     private static final int    TIMEOUT_MS = 15000;
     private static final long   EXTERNAL_IDS_429_COOLDOWN_MS = 60_000L;
     private static final String USER_AGENT =
@@ -40,6 +40,7 @@ public class TmdbService {
         int tmdbId;
         String imdbId;
         String tmdbMediaType;
+        String backdropUrl;
     }
 
     // ─── Caché en memoria para evitar llamadas duplicadas ─────────────────────
@@ -119,6 +120,59 @@ public class TmdbService {
             return;
         }
         enrichMediaItem(item);
+    }
+
+    public static List<AllCalidadScraper.Season> getTvSeasonsFallback(MediaItem item) {
+        List<AllCalidadScraper.Season> seasons = new ArrayList<>();
+        if (item == null || BuildConfig.TMDB_API_KEY == null || BuildConfig.TMDB_API_KEY.isEmpty()) {
+            return seasons;
+        }
+
+        ensureExternalIds(item);
+        int tmdbId = item.getTmdbId();
+        if (tmdbId <= 0) {
+            return seasons;
+        }
+
+        try {
+            String url = API_BASE + "/tv/" + tmdbId + "?api_key="
+                    + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8")
+                    + "&language=es-ES";
+            JSONObject root = new JSONObject(httpGet(url));
+            JSONArray seasonArray = root.optJSONArray("seasons");
+            if (seasonArray == null || seasonArray.length() == 0) {
+                return seasons;
+            }
+
+            for (int i = 0; i < seasonArray.length(); i++) {
+                JSONObject seasonObj = seasonArray.optJSONObject(i);
+                if (seasonObj == null) {
+                    continue;
+                }
+
+                int seasonNumber = seasonObj.optInt("season_number", 0);
+                int episodeCount = seasonObj.optInt("episode_count", 0);
+                if (seasonNumber <= 0 || episodeCount <= 0) {
+                    continue;
+                }
+
+                AllCalidadScraper.Season season = new AllCalidadScraper.Season();
+                season.seasonNumber = seasonNumber;
+                for (int ep = 1; ep <= episodeCount; ep++) {
+                    AllCalidadScraper.Episode episode = new AllCalidadScraper.Episode();
+                    episode.id = buildSyntheticEpisodeId(tmdbId, seasonNumber, ep);
+                    episode.seasonNumber = seasonNumber;
+                    episode.episodeNumber = ep;
+                    episode.title = "Episodio " + ep;
+                    season.episodes.add(episode);
+                }
+                seasons.add(season);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TMDB season fallback failed: " + e.getMessage());
+        }
+
+        return seasons;
     }
 
     public static List<MediaItem> getPopularHomeItems(int limit) {
@@ -231,6 +285,9 @@ public class TmdbService {
         if (result.posterUrl != null && !result.posterUrl.isEmpty()) {
             item.setImagen(result.posterUrl);
         }
+        if (result.backdropUrl != null && !result.backdropUrl.isEmpty()) {
+            item.setBackdrop(result.backdropUrl);
+        }
         String currentSynopsis = item.getSynopsis();
         if ((currentSynopsis == null || currentSynopsis.trim().isEmpty())
                 && result.overview != null && !result.overview.trim().isEmpty()) {
@@ -315,6 +372,8 @@ public class TmdbService {
 
         String posterPath = normalizeTmdbImagePath(raw.optString("poster_path", ""));
         String posterUrl = posterPath.isEmpty() ? "" : IMAGE_BASE + posterPath;
+        String backdropPath = normalizeTmdbImagePath(raw.optString("backdrop_path", ""));
+        String backdropUrl = backdropPath.isEmpty() ? "" : IMAGE_BASE + backdropPath;
         String overview = raw.optString("overview", "");
         double rating = raw.optDouble("vote_average", 0.0);
 
@@ -324,6 +383,7 @@ public class TmdbService {
         item.setTmdbId(tmdbId);
         item.setMediaType("movie".equals(type) ? "movies" : "tvshows");
         item.setFuente("tmdb");
+        item.setBackdrop(backdropUrl);
         if (fetchExternalId) {
             item.setImdbId(fetchExternalImdbId(type, tmdbId));
         }
@@ -415,6 +475,8 @@ public class TmdbService {
             TmdbResult result = new TmdbResult();
             String posterPath = normalizeTmdbImagePath(first.optString("poster_path", ""));
             if (!posterPath.isEmpty()) result.posterUrl = IMAGE_BASE + posterPath;
+            String backdropPath = normalizeTmdbImagePath(first.optString("backdrop_path", ""));
+            if (!backdropPath.isEmpty()) result.backdropUrl = IMAGE_BASE + backdropPath;
             result.overview = first.optString("overview", "");
             result.tmdbId = first.optInt("id", 0);
             result.tmdbMediaType = detectEndpointFromMediaType(endpoint, first.optString("media_type", ""));
@@ -502,6 +564,11 @@ public class TmdbService {
                 .replaceAll("\\(\\d{4}\\)", "")
                 .replaceAll("\\[.*?\\]", "")
                 .trim();
+    }
+
+    private static int buildSyntheticEpisodeId(int tmdbId, int season, int episode) {
+        long value = ((long) tmdbId * 10000L) + ((long) season * 100L) + episode;
+        return value > Integer.MAX_VALUE ? Integer.MAX_VALUE - 1 : (int) value;
     }
 
     private static String httpGet(String urlString) throws IOException {

@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Layout TV estilo Netflix/REX
+    Sidebar angosto (64dp icono-only) + área de contenido amplia
+    Compatible: Android TV 4K, FHD, y tablets grandes
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#0A0C10">
+
+    <!-- ══════════════════════════════════════════════
+         SIDEBAR ANGOSTO (64dp) – solo íconos + logo
+         ══════════════════════════════════════════════ -->
+    <LinearLayout
+        android:id="@+id/sidebar"
+        android:layout_width="64dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="#0E1119"
+        android:paddingTop="20dp"
+        android:paddingBottom="20dp"
+        android:gravity="center_horizontal">
+
+        <!-- Logo REX compacto -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="R"
+            android:textColor="#E63540"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:fontFamily="sans-serif-condensed"
+            android:layout_marginBottom="28dp" />
+
+        <!-- Divisor -->
+        <View
+            android:layout_width="32dp"
+            android:layout_height="1dp"
+            android:background="#1E2330"
+            android:layout_marginBottom="20dp" />
+
+        <!-- NAV: Home -->
+        <LinearLayout
+            android:id="@+id/menu_home"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/bg_tv_menu_item"
+            android:nextFocusDown="@id/menu_buscar">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_home"
+                android:tint="#FFFFFF" />
+        </LinearLayout>
+
+        <!-- NAV: Buscar -->
+        <LinearLayout
+            android:id="@+id/menu_buscar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginTop="4dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/bg_tv_menu_item"
+            android:nextFocusUp="@id/menu_home"
+            android:nextFocusDown="@id/menu_categorias">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_search"
+                android:tint="#8A8F9E" />
+        </LinearLayout>
+
+        <!-- NAV: Categorías -->
+        <LinearLayout
+            android:id="@+id/menu_categorias"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginTop="4dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/bg_tv_menu_item"
+            android:nextFocusUp="@id/menu_buscar"
+            android:nextFocusDown="@id/menu_series">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_grid"
+                android:tint="#8A8F9E" />
+        </LinearLayout>
+
+        <!-- NAV: Series -->
+        <LinearLayout
+            android:id="@+id/menu_series"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginTop="4dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/bg_tv_menu_item"
+            android:nextFocusUp="@id/menu_categorias"
+            android:nextFocusDown="@id/menu_doramas">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_tv"
+                android:tint="#8A8F9E" />
+        </LinearLayout>
+
+        <!-- NAV: Doramas -->
+        <LinearLayout
+            android:id="@+id/menu_doramas"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginTop="4dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/bg_tv_menu_item"
+            android:nextFocusUp="@id/menu_series">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_star"
+                android:tint="#8A8F9E" />
+        </LinearLayout>
+
+        <!-- Spacer -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- NAV: Ajustes -->
+        <LinearLayout
+            android:id="@+id/menu_ajustes"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/bg_tv_menu_item">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_settings"
+                android:tint="#8A8F9E" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- ══════════════════════════════════════════════
+         ÁREA PRINCIPAL DE CONTENIDO
+         ══════════════════════════════════════════════ -->
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <!-- ── HERO BANNER ── -->
+        
+
+            <!-- ── SECCIONES (RecyclerView vertical) ── -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_home_sections"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:clipToPadding="false"
+                android:paddingTop="8dp"
+                android:paddingBottom="32dp"
+                android:overScrollMode="never" />
+
+        </LinearLayout>
+
+        <!-- Loading spinner -->
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="#E63540"
+            android:visibility="gone" />
+
+    </FrameLayout>
+</LinearLayout>

@@ -303,6 +303,10 @@ public class AllCalidadScraper {
                 mi.setRating(0.0);
             }
         }
+        // Prefer backdrop when available for richer detail screens (TV)
+        if (item.backdropUrl != null && !item.backdropUrl.isEmpty()) {
+            mi.setBackdrop(item.backdropUrl);
+        }
 
         return mi;
     }

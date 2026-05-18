@@ -1,31 +1,71 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+    item_section.xml  – Fila de sección estilo Netflix/REX
+    Título en mayúsculas con tracking + RecyclerView horizontal de cards
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:paddingTop="6dp"
-    android:paddingBottom="10dp">
+    android:paddingTop="4dp"
+    android:paddingBottom="12dp">
 
-    <TextView
-        android:id="@+id/section_title"
-        android:layout_width="wrap_content"
+    <!-- Encabezado: título + "Ver todo" -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingStart="16dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
         android:paddingTop="16dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="8dp"
-        android:textColor="@color/textPrimary"
-        android:textSize="21sp"
-        android:textStyle="bold"
-        android:letterSpacing="0.02" />
+        android:paddingBottom="10dp">
 
+        <!-- Barra roja de acento vertical -->
+        <View
+            android:layout_width="3dp"
+            android:layout_height="16dp"
+            android:background="#E63540"
+            android:layout_marginEnd="10dp" />
+
+        <TextView
+            android:id="@+id/section_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textAllCaps="true"
+            android:letterSpacing="0.10"
+            android:fontFamily="sans-serif-medium" />
+
+        <TextView
+            android:id="@+id/section_see_all"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Ver todo"
+            android:textColor="#E63540"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:padding="4dp" />
+
+    </LinearLayout>
+
+    <!-- Lista horizontal de cards -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_items"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+       
+        android:layout_height="250dp"
+        android:paddingTop="10dp"
         android:nestedScrollingEnabled="false"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:clipToPadding="false" />
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:clipToPadding="false"
+        android:overScrollMode="never" />
 
 </LinearLayout>

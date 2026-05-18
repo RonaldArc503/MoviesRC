@@ -6,6 +6,7 @@ public class MediaItem implements Serializable {
     private String titulo;
     private String anio;
     private String imagen;
+    private String backdrop;
     private String detailUrl;
     private String fuente;
     private String mediaType;
@@ -13,6 +14,7 @@ public class MediaItem implements Serializable {
     private String synopsis;
     private boolean isDublado;
     private double rating;
+    private int progress;
     private int tmdbId;
     private String imdbId;
 
@@ -20,10 +22,12 @@ public class MediaItem implements Serializable {
         this.titulo = titulo;
         this.anio = anio;
         this.imagen = imagen;
+        this.backdrop = "";
         this.detailUrl = detailUrl;
         this.postId = 0;
         this.synopsis = "";
         this.rating = 0.0;
+        this.progress = 0;
         this.tmdbId = 0;
         this.imdbId = "";
     }
@@ -32,10 +36,12 @@ public class MediaItem implements Serializable {
         this.titulo = titulo;
         this.anio = anio;
         this.imagen = imagen;
+        this.backdrop = "";
         this.detailUrl = detailUrl;
         this.postId = postId;
         this.synopsis = "";
         this.rating = 0.0;
+        this.progress = 0;
         this.tmdbId = 0;
         this.imdbId = "";
     }
@@ -48,6 +54,9 @@ public class MediaItem implements Serializable {
 
     public String getImagen() { return imagen; }
     public void setImagen(String imagen) { this.imagen = imagen; }
+
+    public String getBackdrop() { return backdrop; }
+    public void setBackdrop(String backdrop) { this.backdrop = backdrop; }
 
     public String getDetailUrl() { return detailUrl; }
     public void setDetailUrl(String detailUrl) { this.detailUrl = detailUrl; }
@@ -69,6 +78,9 @@ public class MediaItem implements Serializable {
 
     public double getRating() { return rating; }
     public void setRating(double rating) { this.rating = rating; }
+
+    public int getProgress() { return progress; }
+    public void setProgress(int progress) { this.progress = progress; }
 
     public int getTmdbId() { return tmdbId; }
     public void setTmdbId(int tmdbId) { this.tmdbId = tmdbId; }

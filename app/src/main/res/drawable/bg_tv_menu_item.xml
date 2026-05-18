@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Foco (TV) -->
+    <item android:state_focused="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="#1AE63540"/>
+                </shape>
+            </item>
+            <!-- Borde rojo izquierdo -->
+            <item android:width="3dp" android:gravity="left">
+                <shape android:shape="rectangle">
+                    <solid android:color="#E63540"/>
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+    <!-- Presionado -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#ffffff40"/>
+        </shape>
+    </item>
+
+    <!-- Normal -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent"/>
+        </shape>
+    </item>
+
+</selector>
+
