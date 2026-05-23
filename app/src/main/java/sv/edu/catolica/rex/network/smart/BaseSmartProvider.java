@@ -35,6 +35,11 @@ abstract class BaseSmartProvider implements SmartProvider {
             return result;
         }
 
+        if (isXupalaceNoFolders(embedUrl, html)) {
+            result.embedUrl = "";
+            return result;
+        }
+
         Set<String> hosts = new LinkedHashSet<>();
         Set<String> streams = new LinkedHashSet<>();
 
@@ -47,7 +52,7 @@ abstract class BaseSmartProvider implements SmartProvider {
             }
         }
 
-        // Xupalace often exposes playable links through JS handlers like:
+        // Xupalace exposes playable links through JS handlers like:
         // go_to_playerVast('https://hglink.to/e/....', ...)
         for (String jsPlayerUrl : extractPlayerActionUrls(html)) {
             if (isStreamUrl(jsPlayerUrl)) {
@@ -145,6 +150,9 @@ abstract class BaseSmartProvider implements SmartProvider {
             if (!(lc.contains("/embed/")
                     || lc.contains("minochinos.com")
                     || lc.contains("hglink.to")
+                    || lc.contains("hgcloud.to")
+                    || lc.contains("vibuxer.com")
+                    || lc.contains("filelions.to")
                     || lc.contains("bysedikamoum.com")
                     || lc.contains("voe.sx")
                     || lc.contains("voe.network"))) {
@@ -245,7 +253,6 @@ abstract class BaseSmartProvider implements SmartProvider {
     protected static boolean isStreamUrl(String url) {
         if (url == null) return false;
         String lc = url.toLowerCase(Locale.ROOT);
-        // Avoid mis-detecting static assets as streams.
         if (isStaticAssetUrl(lc)) return false;
         return lc.contains(".m3u8")
                 || lc.contains(".mpd")
@@ -258,8 +265,6 @@ abstract class BaseSmartProvider implements SmartProvider {
         if (url == null || url.isEmpty()) return false;
 
         String lc = url.toLowerCase(Locale.ROOT);
-        // The URL extractor is very permissive; avoid feeding WebView with CSS/JS/font/image assets
-        // (common failure: FontAwesome CSS ends up being treated as a "server" URL).
         if (isStaticAssetUrl(lc)) return false;
         if (lc.contains("embed69.org") || lc.contains("xupalace.org")) {
             return true;
@@ -275,11 +280,15 @@ abstract class BaseSmartProvider implements SmartProvider {
 
         return lc.contains("streamwish")
                 || lc.contains("hglink.to")
+                || lc.contains("hgcloud.to")
+                || lc.contains("vibuxer.com")
+                || lc.contains("filelions.to")
                 || lc.contains("filemoon")
                 || lc.contains("bysedikamoum.com")
                 || lc.contains("vidhide")
                 || lc.contains("minochinos.com")
                 || lc.contains("stape")
+                || lc.contains("streamtape")
                 || lc.contains("vox")
                 || lc.contains("1fichier")
                 || lc.contains("uqload")
@@ -293,7 +302,6 @@ abstract class BaseSmartProvider implements SmartProvider {
 
     private static boolean isStaticAssetUrl(String lcUrl) {
         if (lcUrl == null) return true;
-        // Typical static resources we never want to treat as playback endpoints.
         return lcUrl.contains("fontawesome")
                 || lcUrl.endsWith(".css") || lcUrl.contains(".css?")
                 || lcUrl.endsWith(".js") || lcUrl.contains(".js?")
@@ -439,9 +447,26 @@ abstract class BaseSmartProvider implements SmartProvider {
         String lc = url.toLowerCase(Locale.ROOT);
         return lc.contains("minochinos.com")
                 || lc.contains("hglink.to")
+                || lc.contains("hgcloud.to")
+                || lc.contains("vibuxer.com")
+                || lc.contains("filelions.to")
                 || lc.contains("bysedikamoum.com")
                 || lc.contains("voe.sx")
                 || lc.contains("voe.network");
+    }
+
+    private static boolean isXupalaceNoFolders(String embedUrl, String html) {
+        if (embedUrl == null || html == null) {
+            return false;
+        }
+        String lcUrl = embedUrl.toLowerCase(Locale.ROOT);
+        if (!lcUrl.contains("xupalace.org")) {
+            return false;
+        }
+        String lcHtml = html.toLowerCase(Locale.ROOT);
+        return lcHtml.contains("no folders found")
+                || lcHtml.contains("no se encontraron folders")
+                || lcHtml.contains("\"error\":\"no folders found\"");
     }
 
     protected static String episodeToken(int season, int episode) {

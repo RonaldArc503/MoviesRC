@@ -28,11 +28,14 @@ public class TmdbService {
     private static final String IMAGE_BASE = "https://image.tmdb.org/t/p/original";
     private static final int    TIMEOUT_MS = 15000;
     private static final long   EXTERNAL_IDS_429_COOLDOWN_MS = 60_000L;
+    private static final int    MAX_HTTP_ATTEMPTS = 3;
+    private static final long   REQUEST_BASE_DELAY_MS = 260L;
+    private static final long   REQUEST_JITTER_MS = 180L;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36";
 
     /** Número de hilos para enriquecimiento paralelo */
-    private static final int TMDB_THREAD_COUNT = 8;
+    private static final int TMDB_THREAD_COUNT = 4;
 
     private static class TmdbResult {
         String posterUrl;
@@ -571,8 +574,46 @@ public class TmdbService {
         return value > Integer.MAX_VALUE ? Integer.MAX_VALUE - 1 : (int) value;
     }
 
+    private static final class HttpStatusException extends IOException {
+        final int statusCode;
+        final long retryAfterMs;
+
+        HttpStatusException(int statusCode, String urlString, long retryAfterMs) {
+            super("HTTP " + statusCode + " for " + urlString);
+            this.statusCode = statusCode;
+            this.retryAfterMs = retryAfterMs;
+        }
+    }
+
     private static String httpGet(String urlString) throws IOException {
+        IOException lastException = null;
+        for (int attempt = 1; attempt <= MAX_HTTP_ATTEMPTS; attempt++) {
+            RequestGuard.waitForSlot(urlString, REQUEST_BASE_DELAY_MS, REQUEST_JITTER_MS, attempt);
+            try {
+                return httpGetOnce(urlString);
+            } catch (HttpStatusException e) {
+                lastException = e;
+                boolean retryableStatus = e.statusCode == 429
+                        || e.statusCode == 403
+                        || (e.statusCode >= 500 && e.statusCode <= 599);
+                if (!retryableStatus || attempt >= MAX_HTTP_ATTEMPTS) {
+                    throw e;
+                }
+                sleepBeforeRetry(RequestGuard.computeRetryDelayMs(attempt, e.statusCode, e.retryAfterMs));
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt >= MAX_HTTP_ATTEMPTS) {
+                    throw e;
+                }
+                sleepBeforeRetry(RequestGuard.computeRetryDelayMs(attempt, -1, -1));
+            }
+        }
+        throw lastException;
+    }
+
+    private static String httpGetOnce(String urlString) throws IOException {
         HttpURLConnection conn = null;
+        BufferedReader br = null;
         try {
             conn = (HttpURLConnection) new URL(urlString).openConnection();
             conn.setRequestMethod("GET");
@@ -582,19 +623,53 @@ public class TmdbService {
             conn.setRequestProperty("Accept", "application/json");
 
             int responseCode = conn.getResponseCode();
+            long retryAfterMs = parseRetryAfterMs(conn.getHeaderField("Retry-After"));
+            RequestGuard.onResponse(urlString, responseCode, retryAfterMs);
             if (responseCode >= 400) {
-                throw new IOException("HTTP " + responseCode + " for " + urlString);
+                throw new HttpStatusException(responseCode, urlString, retryAfterMs);
             }
 
-            BufferedReader br = new BufferedReader(
+            br = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), "UTF-8"));
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = br.readLine()) != null) sb.append(line);
-            br.close();
             return sb.toString();
         } finally {
+            if (br != null) {
+                try { br.close(); } catch (IOException ignored) { }
+            }
             if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static void sleepBeforeRetry(long delayMs) {
+        if (delayMs <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static long parseRetryAfterMs(String retryAfterHeader) {
+        if (retryAfterHeader == null) {
+            return -1L;
+        }
+        String value = retryAfterHeader.trim();
+        if (value.isEmpty()) {
+            return -1L;
+        }
+        try {
+            long seconds = Long.parseLong(value);
+            if (seconds <= 0) {
+                return -1L;
+            }
+            return Math.min(seconds * 1000L, 60_000L);
+        } catch (NumberFormatException ignored) {
+            return -1L;
         }
     }
 }

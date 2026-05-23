@@ -3,6 +3,7 @@ package sv.edu.catolica.rex.ui.home;
 import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.graphics.Color;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -291,18 +292,80 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     }
                 }
 
-                Glide.with(itemView.getContext())
-                        .load(item.getImagen())
-                        .transition(DrawableTransitionOptions.withCrossFade(200))
-                        .placeholder(R.drawable.placeholder_poster)
-                        .error(R.drawable.placeholder_poster)
-                        .centerCrop()
-                        .into(ivPoster);
+                String primaryPosterUrl = resolvePreferredImageUrl(item);
+                String httpsFallbackUrl = toHttpsUrl(primaryPosterUrl);
+
+                if (TextUtils.isEmpty(primaryPosterUrl)) {
+                    ivPoster.setImageResource(R.drawable.placeholder_poster);
+                } else if (!primaryPosterUrl.equals(httpsFallbackUrl)) {
+                    Glide.with(itemView.getContext())
+                            .load(primaryPosterUrl)
+                            .transition(DrawableTransitionOptions.withCrossFade(200))
+                            .placeholder(R.drawable.placeholder_poster)
+                            .error(
+                                    Glide.with(itemView.getContext())
+                                            .load(httpsFallbackUrl)
+                                            .placeholder(R.drawable.placeholder_poster)
+                                            .error(R.drawable.placeholder_poster)
+                                            .centerCrop()
+                            )
+                            .centerCrop()
+                            .into(ivPoster);
+                } else {
+                    Glide.with(itemView.getContext())
+                            .load(primaryPosterUrl)
+                            .transition(DrawableTransitionOptions.withCrossFade(200))
+                            .placeholder(R.drawable.placeholder_poster)
+                            .error(R.drawable.placeholder_poster)
+                            .centerCrop()
+                            .into(ivPoster);
+                }
 
                 itemView.setOnClickListener(null);
                 itemView.setOnClickListener(v -> {
                     if (listener != null) listener.onItemClick(item);
                 });
+            }
+
+            private String resolvePreferredImageUrl(MediaItem item) {
+                String poster = sanitizeImageUrl(item != null ? item.getImagen() : null);
+                if (!poster.isEmpty()) {
+                    return poster;
+                }
+                return sanitizeImageUrl(item != null ? item.getBackdrop() : null);
+            }
+
+            private String sanitizeImageUrl(String rawUrl) {
+                if (rawUrl == null) {
+                    return "";
+                }
+                String value = rawUrl.trim();
+                if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+                    return "";
+                }
+                if (value.toLowerCase(Locale.ROOT).contains("null")) {
+                    return "";
+                }
+                if (value.startsWith("//")) {
+                    return "https:" + value;
+                }
+                if (value.startsWith("/")) {
+                    return "https://allcalidad.re" + value;
+                }
+                if (!value.startsWith("http://") && !value.startsWith("https://")) {
+                    return "https://" + value;
+                }
+                return value;
+            }
+
+            private String toHttpsUrl(String url) {
+                if (url == null) {
+                    return "";
+                }
+                if (url.startsWith("http://")) {
+                    return "https://" + url.substring("http://".length());
+                }
+                return url;
             }
         }
     }

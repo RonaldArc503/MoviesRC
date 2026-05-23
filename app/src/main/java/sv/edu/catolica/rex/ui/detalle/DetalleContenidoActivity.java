@@ -99,17 +99,24 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                 int postId = mediaItem.getPostId();
                 String mediaType = mediaItem.getMediaType();
                 boolean isSeries = isSeriesType(mediaType);
+
                 if (!isSeries) {
+                    // Película: resolver URLs de reproducción directamente
                     urls = smartScraperEngine.resolveMovieUrls(DetalleContenidoActivity.this, mediaItem);
-                } else if (postId <= 0) {
-                    urls = smartScraperEngine.resolveEpisodeUrls(DetalleContenidoActivity.this, mediaItem, 1, 1);
-                    seasons = TmdbService.getTvSeasonsFallback(mediaItem);
-                }
-                if (postId > 0) {
-                    AllCalidadScraper.hit(postId, normalizePostType(mediaType));
-                    if (isSeries) {
+                } else {
+                    // Series: NO pre-resolver 1x01 aquí para no contaminar el cache.
+                    // Los episodios se cargan al tocarlos en el adapter.
+                    // Solo obtenemos la lista de temporadas/episodios.
+                    if (postId > 0) {
                         seasons = AllCalidadScraper.getSeasons(postId);
                     } else {
+                        seasons = TmdbService.getTvSeasonsFallback(mediaItem);
+                    }
+                }
+
+                if (postId > 0) {
+                    AllCalidadScraper.hit(postId, normalizePostType(mediaType));
+                    if (!isSeries) {
                         if (urls == null || urls.isEmpty()) {
                             AllCalidadScraper.PlayerData player = AllCalidadScraper.getPlayer(postId);
                             urls = AllCalidadScraper.getPlayableUrls(player);
@@ -241,20 +248,15 @@ public class DetalleContenidoActivity extends AppCompatActivity {
         btnPlay.setVisibility(View.VISIBLE);
 
         if (isSeriesContent) {
-            if (firstSeriesEpisode == null) {
-                if (playUrls.isEmpty()) {
-                    btnPlay.setEnabled(false);
-                    btnPlay.setText("No disponible");
-                    return;
-                }
-
+            if (firstSeriesEpisode != null && firstSeriesEpisode.id > 0) {
                 btnPlay.setEnabled(true);
-                btnPlay.setText("Reproducir T1:E1");
-                return;
+                btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
+            } else {
+                // Sin episodios disponibles aún o sin postId — ocultar el botón,
+                // el usuario debe tocar directamente en el episodio del listado.
+                btnPlay.setEnabled(false);
+                btnPlay.setText("Selecciona un episodio");
             }
-
-            btnPlay.setEnabled(true);
-            btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
             return;
         }
 

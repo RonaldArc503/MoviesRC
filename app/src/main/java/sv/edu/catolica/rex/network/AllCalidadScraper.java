@@ -28,6 +28,9 @@ public class AllCalidadScraper {
     private static final String SITE_BASE = "https://allcalidad.re";
     private static final String API_BASE  = "https://allcalidad.re/api/rest";
     private static final int    TIMEOUT_MS = 30_000;
+    private static final int    MAX_HTTP_ATTEMPTS = 3;
+    private static final long   REQUEST_BASE_DELAY_MS = 420L;
+    private static final long   REQUEST_JITTER_MS = 260L;
 
     // ── User-Agent real de Chrome 124 en Android ──────────────────────────────
     private static final String USER_AGENT =
@@ -493,6 +496,17 @@ public class AllCalidadScraper {
         return "";
     }
 
+    private static final class HttpStatusException extends IOException {
+        final int statusCode;
+        final long retryAfterMs;
+
+        HttpStatusException(int statusCode, String urlString, long retryAfterMs) {
+            super("HTTP " + statusCode + " for " + urlString);
+            this.statusCode = statusCode;
+            this.retryAfterMs = retryAfterMs;
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // HTTP — cabeceras de navegador real, reintentos, manejo graceful de 500
     // ─────────────────────────────────────────────────────────────────────────
@@ -504,17 +518,25 @@ public class AllCalidadScraper {
      */
     private static String httpGet(String urlString) throws IOException {
         IOException lastException = null;
-        for (int attempt = 1; attempt <= 2; attempt++) {
+        for (int attempt = 1; attempt <= MAX_HTTP_ATTEMPTS; attempt++) {
+            RequestGuard.waitForSlot(urlString, REQUEST_BASE_DELAY_MS, REQUEST_JITTER_MS, attempt);
             try {
                 return httpGetOnce(urlString);
+            } catch (HttpStatusException e) {
+                lastException = e;
+                boolean retryableStatus = e.statusCode == 429
+                        || e.statusCode == 403
+                        || (e.statusCode >= 500 && e.statusCode <= 599);
+                if (!retryableStatus || attempt >= MAX_HTTP_ATTEMPTS) {
+                    throw e;
+                }
+                sleepBeforeRetry(RequestGuard.computeRetryDelayMs(attempt, e.statusCode, e.retryAfterMs));
             } catch (IOException e) {
                 lastException = e;
-                String msg = e.getMessage();
-                boolean isServerError = msg != null && (msg.startsWith("HTTP 5") || msg.startsWith("HTTP 429"));
-                if (!isServerError) throw e;   // Error de red, no reintentar
-                if (attempt < 2) {
-                    try { Thread.sleep(800); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                if (attempt >= MAX_HTTP_ATTEMPTS) {
+                    throw e;
                 }
+                sleepBeforeRetry(RequestGuard.computeRetryDelayMs(attempt, -1, -1));
             }
         }
         throw lastException;
@@ -545,7 +567,9 @@ public class AllCalidadScraper {
             conn.setRequestProperty("X-Requested-With","XMLHttpRequest");
 
             int code = conn.getResponseCode();
-            if (code >= 400) throw new IOException("HTTP " + code + " for " + urlString);
+            long retryAfterMs = parseRetryAfterMs(conn.getHeaderField("Retry-After"));
+            RequestGuard.onResponse(urlString, code, retryAfterMs);
+            if (code >= 400) throw new HttpStatusException(code, urlString, retryAfterMs);
 
             // Sin GZIPInputStream — Java descomprime automáticamente
             br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
@@ -558,6 +582,36 @@ public class AllCalidadScraper {
         } finally {
             if (br   != null) try { br.close();   } catch (IOException ignored) {}   // ← cerrar siempre
             if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static void sleepBeforeRetry(long delayMs) {
+        if (delayMs <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static long parseRetryAfterMs(String retryAfterHeader) {
+        if (retryAfterHeader == null) {
+            return -1L;
+        }
+        String value = retryAfterHeader.trim();
+        if (value.isEmpty()) {
+            return -1L;
+        }
+        try {
+            long seconds = Long.parseLong(value);
+            if (seconds <= 0) {
+                return -1L;
+            }
+            return Math.min(seconds * 1000L, 60_000L);
+        } catch (NumberFormatException ignored) {
+            return -1L;
         }
     }
 }

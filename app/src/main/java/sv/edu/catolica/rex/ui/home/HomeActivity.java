@@ -2,6 +2,7 @@ package sv.edu.catolica.rex.ui.home;
 
 import android.app.UiModeManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.KeyEvent;
@@ -54,6 +55,7 @@ public class HomeActivity extends AppCompatActivity {
     private View menuCategorias;
     private View menuSeries;
     private View menuDoramas;
+    private View menuAjustes;
 
     private boolean isSearchMode          = false;
     private boolean suppressQueryListener = false;
@@ -144,6 +146,7 @@ public class HomeActivity extends AppCompatActivity {
         menuCategorias = findViewById(R.id.menu_categorias);
         menuSeries = findViewById(R.id.menu_series);
         menuDoramas = findViewById(R.id.menu_doramas);
+        menuAjustes = findViewById(R.id.menu_ajustes);
 
         if (menuHome == null || menuBuscar == null || menuCategorias == null
                 || menuSeries == null || menuDoramas == null) {
@@ -164,30 +167,30 @@ public class HomeActivity extends AppCompatActivity {
         });
 
         menuBuscar.setOnClickListener(v -> {
-            setTvMenuSelected(menuBuscar);
-            activateTvSearchInput();
+            startActivity(new Intent(HomeActivity.this, TvSearchActivity.class));
         });
 
         menuCategorias.setOnClickListener(v -> {
-            setTvMenuSelected(menuCategorias);
-            showSections(buildCategorySections(homeSectionsSnapshot));
+            handleTvMenuPlaceholder(menuCategorias);
         });
 
         menuSeries.setOnClickListener(v -> {
-            setTvMenuSelected(menuSeries);
-            showSections(filterSectionsByType(homeSectionsSnapshot, true));
+            handleTvMenuPlaceholder(menuSeries);
         });
 
         menuDoramas.setOnClickListener(v -> {
-            setTvMenuSelected(menuDoramas);
-            showSections(filterSectionsDoramas(homeSectionsSnapshot));
+            handleTvMenuPlaceholder(menuDoramas);
         });
+
+        if (menuAjustes != null) {
+            menuAjustes.setOnClickListener(v -> handleTvMenuPlaceholder(menuAjustes));
+        }
 
         setTvMenuSelected(menuHome);
     }
 
     private void setTvMenuSelected(View selectedItem) {
-        View[] items = new View[]{menuHome, menuBuscar, menuCategorias, menuSeries, menuDoramas};
+        View[] items = new View[]{menuHome, menuBuscar, menuCategorias, menuSeries, menuDoramas, menuAjustes};
         for (View item : items) {
             if (item == null) {
                 continue;
@@ -218,6 +221,11 @@ public class HomeActivity extends AppCompatActivity {
                 imm.showSoftInput(searchText, InputMethodManager.SHOW_IMPLICIT);
             }
         }
+    }
+
+    private void handleTvMenuPlaceholder(View menuItem) {
+        setTvMenuSelected(menuItem);
+        Toast.makeText(this, "Proximamente", Toast.LENGTH_SHORT).show();
     }
 
     private void loadHomeData() { loadHomeData(false); }
