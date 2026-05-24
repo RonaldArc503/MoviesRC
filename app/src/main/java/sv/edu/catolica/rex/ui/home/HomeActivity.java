@@ -30,6 +30,7 @@ import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.Section;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
+import sv.edu.catolica.rex.network.smart.PelispediaScraper;
 import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
 //import sv.edu.catolica.rex.ui.detalle.DetalleContenidoActivity;
 
@@ -52,6 +53,7 @@ public class HomeActivity extends AppCompatActivity {
 
     private View menuHome;
     private View menuBuscar;
+    private View menuCanales;
     private View menuCategorias;
     private View menuSeries;
     private View menuDoramas;
@@ -62,6 +64,11 @@ public class HomeActivity extends AppCompatActivity {
     private String  lastSearchQuery       = "";
     private int     activeRequestId       = 0;
     private boolean tmdbKeyWarningShown   = false;
+    private int lastFocusedSectionPos = 0;
+    private int lastFocusedItemPos = 0;
+    private int lastHomeFirstVisiblePos = 0;
+    private int lastHomeTopOffset = 0;
+    private boolean pendingTvFocusRestore = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -75,9 +82,24 @@ public class HomeActivity extends AppCompatActivity {
         searchView  = findViewById(R.id.search_view);
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
+        rvSections.setHasFixedSize(true);
+        rvSections.setItemAnimator(null);
+        rvSections.setItemViewCacheSize(isTv ? 8 : 4);
         adapter = new HomeAdapter(this, new ArrayList<>(),
-                item -> DetalleActivity.start(HomeActivity.this, item), isTv);
+                this::openDetail, isTv);
+        adapter.setOnFocusPositionChangedListener((sectionPosition, itemPosition) -> {
+            lastFocusedSectionPos = Math.max(0, sectionPosition);
+            lastFocusedItemPos = Math.max(0, itemPosition);
+        });
         rvSections.setAdapter(adapter);
+
+        if (savedInstanceState != null) {
+            lastFocusedSectionPos = savedInstanceState.getInt("home_focus_section", 0);
+            lastFocusedItemPos = savedInstanceState.getInt("home_focus_item", 0);
+            lastHomeFirstVisiblePos = savedInstanceState.getInt("home_scroll_pos", 0);
+            lastHomeTopOffset = savedInstanceState.getInt("home_scroll_offset", 0);
+            pendingTvFocusRestore = isTv;
+        }
 
         if (searchView != null) {
             searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
@@ -101,6 +123,8 @@ public class HomeActivity extends AppCompatActivity {
         if (isTv) {
             setupTvSearchBehavior();
             setupTvSideMenu();
+        } else {
+            setupPhoneBottomMenu();
         }
 
         loadHomeData(false);
@@ -143,12 +167,13 @@ public class HomeActivity extends AppCompatActivity {
     private void setupTvSideMenu() {
         menuHome = findViewById(R.id.menu_home);
         menuBuscar = findViewById(R.id.menu_buscar);
+        menuCanales = findViewById(R.id.menu_canales);
         menuCategorias = findViewById(R.id.menu_categorias);
         menuSeries = findViewById(R.id.menu_series);
         menuDoramas = findViewById(R.id.menu_doramas);
         menuAjustes = findViewById(R.id.menu_ajustes);
 
-        if (menuHome == null || menuBuscar == null || menuCategorias == null
+        if (menuHome == null || menuBuscar == null || menuCanales == null || menuCategorias == null
                 || menuSeries == null || menuDoramas == null) {
             return;
         }
@@ -161,6 +186,7 @@ public class HomeActivity extends AppCompatActivity {
             }
             if (!homeSectionsSnapshot.isEmpty()) {
                 showSections(copySections(homeSectionsSnapshot));
+                restoreTvFocusIfNeeded();
             } else {
                 loadHomeData(false);
             }
@@ -168,6 +194,11 @@ public class HomeActivity extends AppCompatActivity {
 
         menuBuscar.setOnClickListener(v -> {
             startActivity(new Intent(HomeActivity.this, TvSearchActivity.class));
+        });
+
+        menuCanales.setOnClickListener(v -> {
+            setTvMenuSelected(menuCanales);
+            startActivity(new Intent(HomeActivity.this, TvChannelsActivity.class));
         });
 
         menuCategorias.setOnClickListener(v -> {
@@ -190,7 +221,7 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void setTvMenuSelected(View selectedItem) {
-        View[] items = new View[]{menuHome, menuBuscar, menuCategorias, menuSeries, menuDoramas, menuAjustes};
+        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuCategorias, menuSeries, menuDoramas, menuAjustes};
         for (View item : items) {
             if (item == null) {
                 continue;
@@ -226,6 +257,77 @@ public class HomeActivity extends AppCompatActivity {
     private void handleTvMenuPlaceholder(View menuItem) {
         setTvMenuSelected(menuItem);
         Toast.makeText(this, "Proximamente", Toast.LENGTH_SHORT).show();
+    }
+
+    private void setupPhoneBottomMenu() {
+        menuHome = findViewById(R.id.menu_home);
+        menuBuscar = findViewById(R.id.menu_buscar);
+        menuCanales = findViewById(R.id.menu_canales);
+        menuCategorias = findViewById(R.id.menu_categorias);
+        menuSeries = findViewById(R.id.menu_series);
+        menuDoramas = findViewById(R.id.menu_doramas);
+        menuAjustes = findViewById(R.id.menu_ajustes);
+
+        if (menuHome == null || menuBuscar == null || menuCanales == null || menuCategorias == null
+                || menuSeries == null || menuDoramas == null) {
+            return;
+        }
+
+        menuHome.setOnClickListener(v -> {
+            setTvMenuSelected(menuHome);
+            if (isSearchMode) {
+                exitSearchModeAndRestoreHome();
+                return;
+            }
+            if (!homeSectionsSnapshot.isEmpty()) {
+                showSections(copySections(homeSectionsSnapshot));
+            } else {
+                loadHomeData(false);
+            }
+        });
+
+        menuBuscar.setOnClickListener(v -> {
+            setTvMenuSelected(menuBuscar);
+            activateTvSearchInput();
+        });
+
+        menuCanales.setOnClickListener(v -> {
+            setTvMenuSelected(menuCanales);
+            startActivity(new Intent(HomeActivity.this, TvChannelsActivity.class));
+        });
+
+        menuCategorias.setOnClickListener(v -> {
+            setTvMenuSelected(menuCategorias);
+            List<Section> source = homeSectionsSnapshot.isEmpty() ? getCachedHomeSectionsIfFresh() : homeSectionsSnapshot;
+            showSections(buildCategorySections(copySections(source)));
+        });
+
+        menuSeries.setOnClickListener(v -> {
+            setTvMenuSelected(menuSeries);
+            List<Section> source = homeSectionsSnapshot.isEmpty() ? getCachedHomeSectionsIfFresh() : homeSectionsSnapshot;
+            showSections(filterSectionsByType(copySections(source), true));
+        });
+
+        menuDoramas.setOnClickListener(v -> {
+            setTvMenuSelected(menuDoramas);
+            List<Section> source = homeSectionsSnapshot.isEmpty() ? getCachedHomeSectionsIfFresh() : homeSectionsSnapshot;
+            showSections(filterSectionsDoramas(copySections(source)));
+        });
+
+        if (menuAjustes != null) {
+            menuAjustes.setOnClickListener(v -> handleTvMenuPlaceholder(menuAjustes));
+        }
+
+        setTvMenuSelected(menuHome);
+    }
+
+    private void openDetail(MediaItem item) {
+        if (item == null) {
+            return;
+        }
+        captureHomeNavigationState();
+        pendingTvFocusRestore = isTv;
+        DetalleActivity.start(HomeActivity.this, item);
     }
 
     private void loadHomeData() { loadHomeData(false); }
@@ -274,6 +376,9 @@ public class HomeActivity extends AppCompatActivity {
                 stagger();
                 Future<List<MediaItem>> tmdbTrendingFuture =
                         pool.submit(() -> TmdbService.getTrendingHomeItems(20));
+                stagger();
+                Future<List<MediaItem>> pelispediaFuture =
+                    pool.submit(() -> new PelispediaScraper().getHomeItems(12));
                 pool.shutdown();
 
                 // Recolectar (ya están corriendo en paralelo)
@@ -284,6 +389,7 @@ public class HomeActivity extends AppCompatActivity {
                 List<AllCalidadScraper.ContentItem> popularSeries = safeGet(popularSeriesFuture);
                 List<MediaItem> tmdbPopular = safeGet(tmdbPopularFuture);
                 List<MediaItem> tmdbTrending = safeGet(tmdbTrendingFuture);
+                List<MediaItem> pelispediaItems = safeGet(pelispediaFuture);
 
                 List<MediaItem> featuredItems      = mapItems(featured,      10);
                 List<MediaItem> popularItems       = mapItems(popular,       16);
@@ -296,6 +402,10 @@ public class HomeActivity extends AppCompatActivity {
                         featuredItems, popularItems, latestItems,
                         seriesItems, popularSeriesItems,
                         tmdbPopular, tmdbTrending);
+                // add Pelispedia sections as independent group if available
+                if (pelispediaItems != null && !pelispediaItems.isEmpty()) {
+                    sections.add(new Section("Pelispedia - Destacadas", pelispediaItems));
+                }
                 cacheHomeSections(sections);
 
                 runOnUiThread(() -> {
@@ -304,6 +414,7 @@ public class HomeActivity extends AppCompatActivity {
                     showSections(sections);
                     progressBar.setVisibility(ProgressBar.GONE);
                     maybeWarnMissingTmdbKey();
+                    restoreTvFocusIfNeeded();
                 });
 
                 // TMDB en background (paralelo, no bloquea la UI)
@@ -315,7 +426,7 @@ public class HomeActivity extends AppCompatActivity {
 
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || isSearchMode) return;
-                    if (adapter != null) adapter.notifySectionsChanged();
+                    if (adapter != null) adapter.notifyDataSetChanged();
                 });
 
             } catch (Exception e) {
@@ -464,7 +575,7 @@ public class HomeActivity extends AppCompatActivity {
                 TmdbService.enrichMediaItemsParallel(enrichCandidates);
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || !isSearchMode) return;
-                    if (adapter != null) adapter.notifySectionsChanged();
+                    if (adapter != null) adapter.notifyDataSetChanged();
                 });
 
             } catch (Exception e) {
@@ -510,6 +621,30 @@ public class HomeActivity extends AppCompatActivity {
             exitSearchModeAndRestoreHome(); return;
         }
         super.onBackPressed();
+    }
+
+    @Override
+    protected void onPause() {
+        if (isTv) {
+            captureHomeNavigationState();
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        restoreTvFocusIfNeeded();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        captureHomeNavigationState();
+        outState.putInt("home_focus_section", lastFocusedSectionPos);
+        outState.putInt("home_focus_item", lastFocusedItemPos);
+        outState.putInt("home_scroll_pos", lastHomeFirstVisiblePos);
+        outState.putInt("home_scroll_offset", lastHomeTopOffset);
     }
 
     private static synchronized List<Section> getCachedHomeSectionsIfFresh() {
@@ -583,9 +718,64 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void showSections(List<Section> sections) {
-        adapter = new HomeAdapter(this, sections,
-                item -> DetalleActivity.start(HomeActivity.this, item), isTv);
-        rvSections.setAdapter(adapter);
+        if (adapter == null) {
+            adapter = new HomeAdapter(this, sections, this::openDetail, isTv);
+            adapter.setOnFocusPositionChangedListener((sectionPosition, itemPosition) -> {
+                lastFocusedSectionPos = Math.max(0, sectionPosition);
+                lastFocusedItemPos = Math.max(0, itemPosition);
+            });
+            rvSections.setAdapter(adapter);
+            return;
+        }
+        adapter.setSections(sections);
+    }
+
+    private void captureHomeNavigationState() {
+        if (rvSections == null) {
+            return;
+        }
+
+        RecyclerView.LayoutManager manager = rvSections.getLayoutManager();
+        if (!(manager instanceof LinearLayoutManager)) {
+            return;
+        }
+        LinearLayoutManager linear = (LinearLayoutManager) manager;
+        int firstVisible = linear.findFirstVisibleItemPosition();
+        if (firstVisible >= 0) {
+            lastHomeFirstVisiblePos = firstVisible;
+        }
+
+        View topChild = rvSections.getChildAt(0);
+        if (topChild != null) {
+            lastHomeTopOffset = topChild.getTop() - rvSections.getPaddingTop();
+        }
+
+        if (adapter != null) {
+            int focusedSection = adapter.getLastFocusedSection();
+            int focusedItem = adapter.getLastFocusedItem();
+            if (focusedSection >= 0) {
+                lastFocusedSectionPos = focusedSection;
+            }
+            if (focusedItem >= 0) {
+                lastFocusedItemPos = focusedItem;
+            }
+        }
+    }
+
+    private void restoreTvFocusIfNeeded() {
+        if (!isTv || !pendingTvFocusRestore || rvSections == null || adapter == null) {
+            return;
+        }
+
+        pendingTvFocusRestore = false;
+        rvSections.post(() -> {
+            RecyclerView.LayoutManager manager = rvSections.getLayoutManager();
+            if (manager instanceof LinearLayoutManager) {
+                ((LinearLayoutManager) manager)
+                        .scrollToPositionWithOffset(Math.max(0, lastHomeFirstVisiblePos), lastHomeTopOffset);
+            }
+            rvSections.post(() -> adapter.requestFocusAt(lastFocusedSectionPos, lastFocusedItemPos));
+        });
     }
 
     private List<Section> buildCategorySections(List<Section> sourceSections) {

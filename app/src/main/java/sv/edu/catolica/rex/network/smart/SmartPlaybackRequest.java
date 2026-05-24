@@ -4,6 +4,8 @@ public class SmartPlaybackRequest {
     public String title;
     public int tmdbId;
     public String imdbId;
+    public int postId;
+    public int episodePostId;
     public String mediaType;
     public SmartContentType contentType;
     public int seasonNumber;

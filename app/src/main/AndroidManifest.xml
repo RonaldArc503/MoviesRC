@@ -32,6 +32,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".ui.home.TvSearchActivity" />
+        <activity android:name=".ui.home.TvChannelsActivity" />
         <activity android:name=".ui.detalle.DetalleContenidoActivity" />
         <activity android:name=".ui.detalle.DetalleActivity" />
         <activity

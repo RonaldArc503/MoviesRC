@@ -7,12 +7,14 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import android.widget.ImageView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 import java.util.ArrayList;
 import java.util.List;
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
+// Glide removed for compatibility with current layout variants
 
 public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
@@ -25,7 +27,9 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
     private final List<RowItem> rows = new ArrayList<>();
     private final OnEpisodeClickListener listener;
+    private androidx.recyclerview.widget.RecyclerView recyclerView;
     private boolean isTvDevice = false;
+    private String seriesPosterUrl = "";
 
     private static class RowItem {
         int type;
@@ -33,8 +37,14 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         AllCalidadScraper.Episode episode;
     }
 
-    public EpisodeAdapter(OnEpisodeClickListener listener) {
+    public EpisodeAdapter(OnEpisodeClickListener listener, androidx.recyclerview.widget.RecyclerView recyclerView) {
         this.listener = listener;
+        this.recyclerView = recyclerView;
+        setHasStableIds(true);
+    }
+
+    public void setSeriesPoster(String posterUrl) {
+        this.seriesPosterUrl = posterUrl != null ? posterUrl : "";
     }
 
     public void setSeasons(List<AllCalidadScraper.Season> seasons) {
@@ -112,11 +122,68 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 listener.onEpisodeClick(episode);
             }
         });
+
+        // TV focus behavior: scroll the RecyclerView to make the focused item visible
+        episodeHolder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
+            v.setSelected(hasFocus);
+            if (hasFocus && recyclerView != null) {
+                int pos = holder.getBindingAdapterPosition();
+                if (pos != androidx.recyclerview.widget.RecyclerView.NO_POSITION) {
+                    recyclerView.post(() -> recyclerView.smoothScrollToPosition(pos));
+                }
+                v.animate()
+                        .scaleX( hasFocus ? 1.03f : 1.0f)
+                        .scaleY( hasFocus ? 1.03f : 1.0f)
+                        .setDuration(150L)
+                        .start();
+            }
+        });
+
+        // No thumbnail handling here — layouts in this variant don't include thumbnail views.
     }
 
     @Override
     public int getItemCount() {
         return rows.size();
+    }
+
+    @Override
+    public long getItemId(int position) {
+        if (position < 0 || position >= rows.size()) {
+            return RecyclerView.NO_ID;
+        }
+        RowItem row = rows.get(position);
+        if (row.type == TYPE_SEASON_HEADER) {
+            return ("season:" + row.seasonNumber).hashCode();
+        }
+        int id = row.episode != null ? row.episode.id : 0;
+        int season = row.seasonNumber;
+        int episode = row.episode != null ? row.episode.episodeNumber : 0;
+        return ("ep:" + id + ":" + season + ":" + episode).hashCode();
+    }
+
+    public int findPositionByEpisodeId(int episodeId) {
+        if (episodeId <= 0) {
+            return RecyclerView.NO_POSITION;
+        }
+        for (int i = 0; i < rows.size(); i++) {
+            RowItem row = rows.get(i);
+            if (row != null && row.type == TYPE_EPISODE && row.episode != null && row.episode.id == episodeId) {
+                return i;
+            }
+        }
+        return RecyclerView.NO_POSITION;
+    }
+
+    public AllCalidadScraper.Episode getEpisodeAtAdapterPosition(int position) {
+        if (position < 0 || position >= rows.size()) {
+            return null;
+        }
+        RowItem row = rows.get(position);
+        if (row == null || row.type != TYPE_EPISODE) {
+            return null;
+        }
+        return row.episode;
     }
 
     static class SeasonHeaderViewHolder extends RecyclerView.ViewHolder {
@@ -131,7 +198,7 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     static class EpisodeViewHolder extends RecyclerView.ViewHolder {
         TextView tvCode;
         TextView tvTitle;
-
+        
         EpisodeViewHolder(@NonNull View itemView) {
             super(itemView);
             tvCode = itemView.findViewById(R.id.tv_episode_code);

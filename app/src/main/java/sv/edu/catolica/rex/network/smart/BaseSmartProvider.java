@@ -86,6 +86,7 @@ abstract class BaseSmartProvider implements SmartProvider {
         }
 
         addEmbed69DecodedLinks(html, hosts, streams, preferredHosts);
+        addVimeosDirectLinks(html, streams);
         resolveDirectStreamsFromHosts(hosts, streams, embedUrl, preferredHosts);
 
         result.hostUrls.addAll(hosts);
@@ -270,6 +271,11 @@ abstract class BaseSmartProvider implements SmartProvider {
             return true;
         }
 
+        // Prefer links coming from allcalidad (site-specific player pages / APIs)
+        if (lc.contains("allcalidad.re") || lc.contains("allcalidad.")) {
+            return true;
+        }
+
         if (preferredHosts != null) {
             for (String host : preferredHosts) {
                 if (host != null && !host.isEmpty() && lc.contains(host.toLowerCase(Locale.ROOT))) {
@@ -297,7 +303,8 @@ abstract class BaseSmartProvider implements SmartProvider {
                 || lc.contains("mixdrop")
                 || lc.contains("ok.ru")
                 || lc.contains("voe.sx")
-                || lc.contains("voe.network");
+                || lc.contains("voe.network")
+                || lc.contains("vimeos.net");
     }
 
     private static boolean isStaticAssetUrl(String lcUrl) {
@@ -377,6 +384,58 @@ abstract class BaseSmartProvider implements SmartProvider {
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to decode embed69 dataLink: " + e.getMessage());
+        }
+    }
+
+    private static void addVimeosDirectLinks(String html, Set<String> streams) {
+        if (html == null || html.isEmpty() || streams == null) {
+            return;
+        }
+
+        Set<String> candidates = new LinkedHashSet<>();
+
+        Pattern explicitHlsPattern = Pattern.compile(
+                "https?:\\\\?/\\\\?/[^\"'<>\\s]*vimeos\\.net/[^\"'<>\\s]*master\\.m3u8[^\"'<>\\s]*",
+                Pattern.CASE_INSENSITIVE);
+        Matcher escapedMatcher = explicitHlsPattern.matcher(html);
+        while (escapedMatcher.find()) {
+            String candidate = normalizeUrl(escapedMatcher.group());
+            if (!candidate.isEmpty()) {
+                candidates.add(candidate);
+            }
+        }
+
+        Pattern cleanHlsPattern = Pattern.compile(
+                "https?://[^\"'<>\\s]*vimeos\\.net/[^\"'<>\\s]*master\\.m3u8[^\"'<>\\s]*",
+                Pattern.CASE_INSENSITIVE);
+        Matcher cleanMatcher = cleanHlsPattern.matcher(html);
+        while (cleanMatcher.find()) {
+            String candidate = normalizeUrl(cleanMatcher.group());
+            if (!candidate.isEmpty()) {
+                candidates.add(candidate);
+            }
+        }
+
+        Pattern posterPattern = Pattern.compile(
+                "(https?://([a-z0-9.-]*vimeos\\.net))/i/\\d+/\\d+/([a-z0-9]+)\\.(jpg|jpeg|webp|png)",
+                Pattern.CASE_INSENSITIVE);
+        Matcher posterMatcher = posterPattern.matcher(html);
+        while (posterMatcher.find()) {
+            String base = posterMatcher.group(1);
+            String code = posterMatcher.group(3);
+            if (base == null || code == null) {
+                continue;
+            }
+            String directHls = normalizeUrl(base + "/hls2/urlset/" + code + "_/master.m3u8");
+            if (!directHls.isEmpty()) {
+                candidates.add(directHls);
+            }
+        }
+
+        for (String candidate : candidates) {
+            if (isStreamUrl(candidate)) {
+                streams.add(candidate);
+            }
         }
     }
 

@@ -10,7 +10,7 @@ import java.util.List;
 class SmartCacheStore {
 
     private static final String PREF = "smart_scraper_cache";
-    private static final String KEY_PREFIX_PLAYBACK = "playback_v2_";
+    private static final String KEY_PREFIX_PLAYBACK = "playback_v3_";
     private static final String KEY_PREFIX_IDS = "ids_";
     private static final long PLAYBACK_TTL_MS = 6L * 60L * 60L * 1000L;
     private static final long IDS_TTL_MS = 24L * 60L * 60L * 1000L;

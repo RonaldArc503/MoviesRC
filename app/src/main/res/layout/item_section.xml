@@ -49,8 +49,9 @@
             android:textColor="#E63540"
             android:textSize="11sp"
             android:textStyle="bold"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
+            android:focusable="false"
+            android:focusableInTouchMode="false"
+            android:importantForAccessibility="no"
             android:padding="4dp" />
 
     </LinearLayout>
@@ -59,13 +60,13 @@
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_items"
         android:layout_width="match_parent"
-       
         android:layout_height="250dp"
         android:paddingTop="10dp"
         android:nestedScrollingEnabled="false"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:clipToPadding="false"
+        android:descendantFocusability="afterDescendants"
         android:overScrollMode="never" />
 
 </LinearLayout>

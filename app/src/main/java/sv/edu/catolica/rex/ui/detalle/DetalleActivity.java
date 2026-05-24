@@ -4,6 +4,7 @@ import android.app.UiModeManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
@@ -11,9 +12,12 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 import com.bumptech.glide.Glide;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +28,7 @@ import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
 import sv.edu.catolica.rex.network.smart.SmartScraperEngine;
 import sv.edu.catolica.rex.ui.player.PlayerContenidoActivity;
+import sv.edu.catolica.rex.ui.player.PlaybackCacheHelper;
 
 public class DetalleActivity extends AppCompatActivity {
 
@@ -63,13 +68,28 @@ public class DetalleActivity extends AppCompatActivity {
     private EpisodeAdapter episodeAdapter;
     private boolean isSeries = false;
     private AllCalidadScraper.Episode firstSeriesEpisode;
+    private int selectedEpisodeId = -1;
+    private int episodesFirstVisiblePos = 0;
+    private int episodesTopOffset = 0;
+    private String lastPrefetchedUrl = "";
+
+    private final ActivityResultLauncher<Intent> playerLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (result == null || result.getData() == null) {
+                    restoreEpisodeNavigationState(false);
+                    return;
+                }
+                Intent data = result.getData();
+                selectedEpisodeId = data.getIntExtra(PlayerContenidoActivity.RESULT_EPISODE_ID, selectedEpisodeId);
+                restoreEpisodeNavigationState(true);
+            });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         isTV = isTelevision();
-        setContentView(R.layout.activity_detail); // Android selecciona automático según carpeta
+        setContentView(R.layout.activity_detail); // Android selecciona automÃ¡tico segÃºn carpeta
 
         bindViews();
         setupToolbar();
@@ -79,12 +99,17 @@ public class DetalleActivity extends AppCompatActivity {
         // Recibir datos
         mediaItem = (MediaItem) getIntent().getSerializableExtra(EXTRA_MEDIA_ITEM);
         if (mediaItem == null) {
-            Toast.makeText(this, "Error: no se recibió información", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Error: no se recibiÃ³ informaciÃ³n", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
 
         displayBasicInfo();
+        if (savedInstanceState != null) {
+            selectedEpisodeId = savedInstanceState.getInt("selected_episode_id", -1);
+            episodesFirstVisiblePos = savedInstanceState.getInt("episodes_scroll_pos", 0);
+            episodesTopOffset = savedInstanceState.getInt("episodes_scroll_offset", 0);
+        }
         loadDetail();
     }
 
@@ -137,8 +162,9 @@ public class DetalleActivity extends AppCompatActivity {
     }
 
     private void setupRecyclerView() {
-        episodeAdapter = new EpisodeAdapter(this::loadEpisodeServers);
+        episodeAdapter = new EpisodeAdapter(this::loadEpisodeServers, rvEpisodes);
         rvEpisodes.setLayoutManager(new LinearLayoutManager(this));
+        rvEpisodes.setItemAnimator(null);
         rvEpisodes.setAdapter(episodeAdapter);
     }
 
@@ -147,7 +173,7 @@ public class DetalleActivity extends AppCompatActivity {
         tvYearHero.setText(mediaItem.getAnio());
         
         if (tvRating != null) {
-            tvRating.setText("★ " + (mediaItem.getRating() > 0 ? mediaItem.getRating() : "8.0"));
+            tvRating.setText("â˜… " + (mediaItem.getRating() > 0 ? mediaItem.getRating() : "8.0"));
         }
 
         String synopsis = mediaItem.getSynopsis();
@@ -171,7 +197,7 @@ public class DetalleActivity extends AppCompatActivity {
         String mediaType = mediaItem.getMediaType();
         isSeries = isSeriesType(mediaType);
         if (tvBadgeType != null) {
-            tvBadgeType.setText(isSeries ? "SERIE" : "PELÍCULA");
+            tvBadgeType.setText(isSeries ? "SERIE" : "PELÃCULA");
         }
         if (tvBadgeQuality != null) {
             tvBadgeQuality.setText("HD");
@@ -179,6 +205,10 @@ public class DetalleActivity extends AppCompatActivity {
 
         btnPlay.setEnabled(false);
         btnPlay.setText("Cargando...");
+        if (isTV) {
+            btnPlay.setBackgroundResource(R.drawable.bg_btn_play_red_tv);
+            btnPlay.setTextColor(Color.WHITE);
+        }
     }
 
     private void loadDetail() {
@@ -215,13 +245,16 @@ public class DetalleActivity extends AppCompatActivity {
                 final List<String> finalUrls = urls;
                 final List<AllCalidadScraper.Season> finalSeasons = seasons;
                 final String desc = (mediaItem.getSynopsis() != null && !mediaItem.getSynopsis().isEmpty())
-                        ? mediaItem.getSynopsis()
-                        : "Sin sinopsis disponible.";
+                    ? mediaItem.getSynopsis()
+                    : "Sin sinopsis disponible.";
+                final String finalPoster = mediaItem.getImagen();
                 final boolean finalIsSeries = series;
 
                 runOnUiThread(() -> {
                     tvSynopsis.setText(desc);
 
+                    // Provide series poster to adapter so episodes without a still use it
+                    episodeAdapter.setSeriesPoster(finalPoster);
                     bindSeasons(finalSeasons, finalIsSeries);
 
                     btnPlay.setVisibility(View.VISIBLE);
@@ -233,6 +266,9 @@ public class DetalleActivity extends AppCompatActivity {
                     playUrls.addAll(finalUrls);
                     updatePlayButtonState();
                     requestPlayFocusIfTv();
+                    if (selectedEpisodeId > 0) {
+                        restoreEpisodeNavigationState(true);
+                    }
                 });
 
             } catch (Exception e) {
@@ -299,7 +335,8 @@ public class DetalleActivity extends AppCompatActivity {
                         DetalleActivity.this,
                         mediaItem,
                         episode.seasonNumber,
-                        episode.episodeNumber
+                        episode.episodeNumber,
+                        episode.id
                 );
                 if (urls == null || urls.isEmpty()) {
                     if (mediaItem.getPostId() > 0) {
@@ -318,7 +355,9 @@ public class DetalleActivity extends AppCompatActivity {
 
                     ArrayList<String> playList = new ArrayList<>(finalUrls);
                     String playTitle = mediaItem.getTitulo() + " - " + label;
-                    PlayerContenidoActivity.startEpisode(
+                    selectedEpisodeId = episode.id;
+                    captureEpisodeNavigationState();
+                    Intent playerIntent = PlayerContenidoActivity.createEpisodeIntent(
                             DetalleActivity.this,
                             playList,
                             playTitle,
@@ -329,6 +368,7 @@ public class DetalleActivity extends AppCompatActivity {
                             episode.seasonNumber,
                             episode.episodeNumber
                     );
+                    playerLauncher.launch(playerIntent);
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -368,6 +408,28 @@ public class DetalleActivity extends AppCompatActivity {
 
         btnPlay.setEnabled(true);
         btnPlay.setText("Reproducir");
+
+        // Warm the first URL in the background so the first playback starts faster.
+        triggerPlaybackPrefetch();
+    }
+
+    private void triggerPlaybackPrefetch() {
+        if (playUrls.isEmpty()) {
+            return;
+        }
+
+        String firstUrl = playUrls.get(0);
+        if (firstUrl == null || firstUrl.trim().isEmpty()) {
+            return;
+        }
+
+        String normalized = firstUrl.trim();
+        if (normalized.equals(lastPrefetchedUrl)) {
+            return;
+        }
+
+        lastPrefetchedUrl = normalized;
+        PlaybackCacheHelper.preloadFirstChunk(this, normalized, PlaybackCacheHelper.buildPlaybackHeaders(normalized));
     }
 
     private void setupListeners() {
@@ -375,7 +437,7 @@ public class DetalleActivity extends AppCompatActivity {
             setupTvFocusStates();
         }
 
-        // Botón reproducir
+        // BotÃ³n reproducir
         if (btnPlay != null) {
             btnPlay.setOnClickListener(v -> {
                 if (isSeries) {
@@ -385,7 +447,8 @@ public class DetalleActivity extends AppCompatActivity {
                     }
                     if (!playUrls.isEmpty()) {
                         String playTitle = mediaItem.getTitulo() + " - T1:E1";
-                        PlayerContenidoActivity.start(this, playUrls, playTitle);
+                        captureEpisodeNavigationState();
+                        playerLauncher.launch(PlayerContenidoActivity.createIntent(this, playUrls, playTitle));
                         return;
                     }
                     Toast.makeText(this, "No hay episodios disponibles", Toast.LENGTH_SHORT).show();
@@ -394,14 +457,15 @@ public class DetalleActivity extends AppCompatActivity {
 
                 if (!playUrls.isEmpty()) {
                     String playTitle = mediaItem.getTitulo();
-                    PlayerContenidoActivity.start(this, playUrls, playTitle);
+                    captureEpisodeNavigationState();
+                    playerLauncher.launch(PlayerContenidoActivity.createIntent(this, playUrls, playTitle));
                 } else {
-                    Toast.makeText(this, "No se pudo obtener la URL de reproducción", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "No se pudo obtener la URL de reproducciÃ³n", Toast.LENGTH_SHORT).show();
                 }
             });
         }
 
-        // Botón Mi Lista
+        // BotÃ³n Mi Lista
         if (btnMyList != null) {
             btnMyList.setOnClickListener(v -> toggleMyList());
         }
@@ -415,12 +479,12 @@ public class DetalleActivity extends AppCompatActivity {
                     tvSynopsisToggle.setText("Ver menos");
                 } else {
                     tvSynopsis.setMaxLines(4);
-                    tvSynopsisToggle.setText("Ver más");
+                    tvSynopsisToggle.setText("Ver mÃ¡s");
                 }
             });
         }
 
-        // Botón back TV
+        // BotÃ³n back TV
         if (ivBack != null) {
             ivBack.setOnClickListener(v -> onBackPressed());
         }
@@ -433,17 +497,28 @@ public class DetalleActivity extends AppCompatActivity {
 
     private void setupTvFocusStates() {
         if (btnPlay != null) {
+            btnPlay.setFocusableInTouchMode(true);
             btnPlay.setOnFocusChangeListener((v, hasFocus) -> {
                 v.setSelected(hasFocus);
+                if (hasFocus) {
+                    btnPlay.setBackgroundResource(R.drawable.bg_btn_play_white_tv);
+                    btnPlay.setTextColor(Color.BLACK);
+                } else {
+                    btnPlay.setBackgroundResource(R.drawable.bg_btn_play_red_tv);
+                    btnPlay.setTextColor(Color.WHITE);
+                }
                 v.animate()
                         .scaleX(hasFocus ? 1.06f : 1.0f)
                         .scaleY(hasFocus ? 1.06f : 1.0f)
                         .setDuration(150L)
                         .start();
+                v.setAlpha(hasFocus ? 1.0f : 0.92f);
+                v.setTranslationZ(hasFocus ? 10f : 0f);
             });
         }
 
         if (btnMyList != null) {
+            btnMyList.setFocusableInTouchMode(true);
             btnMyList.setOnFocusChangeListener((v, hasFocus) -> {
                 v.setSelected(hasFocus);
                 v.animate()
@@ -451,10 +526,13 @@ public class DetalleActivity extends AppCompatActivity {
                         .scaleY(hasFocus ? 1.05f : 1.0f)
                         .setDuration(150L)
                         .start();
+                v.setAlpha(hasFocus ? 1.0f : 0.92f);
+                v.setTranslationZ(hasFocus ? 8f : 0f);
             });
         }
 
         if (ivBack != null) {
+            ivBack.setFocusableInTouchMode(true);
             ivBack.setOnFocusChangeListener((v, hasFocus) -> v.animate()
                     .scaleX(hasFocus ? 1.07f : 1.0f)
                     .scaleY(hasFocus ? 1.07f : 1.0f)
@@ -482,9 +560,100 @@ public class DetalleActivity extends AppCompatActivity {
             }
         });
     }
+
+    @Override
+    protected void onPause() {
+        captureEpisodeNavigationState();
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        PlaybackCacheHelper.cancelPreload();
+        super.onDestroy();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        captureEpisodeNavigationState();
+        outState.putInt("selected_episode_id", selectedEpisodeId);
+        outState.putInt("episodes_scroll_pos", episodesFirstVisiblePos);
+        outState.putInt("episodes_scroll_offset", episodesTopOffset);
+    }
+
+    private void captureEpisodeNavigationState() {
+        if (rvEpisodes == null) {
+            return;
+        }
+
+        RecyclerView.LayoutManager manager = rvEpisodes.getLayoutManager();
+        if (!(manager instanceof LinearLayoutManager)) {
+            return;
+        }
+        LinearLayoutManager linear = (LinearLayoutManager) manager;
+        int firstVisible = linear.findFirstVisibleItemPosition();
+        if (firstVisible >= 0) {
+            episodesFirstVisiblePos = firstVisible;
+        }
+        View topChild = rvEpisodes.getChildAt(0);
+        if (topChild != null) {
+            episodesTopOffset = topChild.getTop() - rvEpisodes.getPaddingTop();
+        }
+
+        if (episodeAdapter == null) {
+            return;
+        }
+        View focused = getCurrentFocus();
+        if (focused == null) {
+            return;
+        }
+        RecyclerView.ViewHolder holder = rvEpisodes.findContainingViewHolder(focused);
+        if (holder == null) {
+            return;
+        }
+        AllCalidadScraper.Episode focusedEpisode =
+                episodeAdapter.getEpisodeAtAdapterPosition(holder.getBindingAdapterPosition());
+        if (focusedEpisode != null && focusedEpisode.id > 0) {
+            selectedEpisodeId = focusedEpisode.id;
+        }
+    }
+
+    private void restoreEpisodeNavigationState(boolean requestEpisodeFocus) {
+        if (rvEpisodes == null || episodeAdapter == null) {
+            return;
+        }
+        rvEpisodes.post(() -> {
+            RecyclerView.LayoutManager manager = rvEpisodes.getLayoutManager();
+            if (!(manager instanceof LinearLayoutManager)) {
+                return;
+            }
+            LinearLayoutManager linear = (LinearLayoutManager) manager;
+            linear.scrollToPositionWithOffset(Math.max(0, episodesFirstVisiblePos), episodesTopOffset);
+
+            if (!requestEpisodeFocus || selectedEpisodeId <= 0) {
+                return;
+            }
+
+            int targetPos = episodeAdapter.findPositionByEpisodeId(selectedEpisodeId);
+            if (targetPos == RecyclerView.NO_POSITION) {
+                return;
+            }
+
+            linear.scrollToPositionWithOffset(Math.max(0, targetPos - 1), 0);
+            rvEpisodes.post(() -> {
+                RecyclerView.ViewHolder target =
+                        rvEpisodes.findViewHolderForAdapterPosition(targetPos);
+                if (target != null) {
+                    target.itemView.requestFocus();
+                }
+            });
+        });
+    }
+
     private void showSeasonPicker() {
-        // TODO: mostrar diálogo con selector de temporada
-        Toast.makeText(this, "Selector de temporada - Próximamente", Toast.LENGTH_SHORT).show();
+        // TODO: mostrar diÃ¡logo con selector de temporada
+        Toast.makeText(this, "Selector de temporada - PrÃ³ximamente", Toast.LENGTH_SHORT).show();
     }
 
     private void toggleMyList() {
@@ -518,12 +687,13 @@ public class DetalleActivity extends AppCompatActivity {
         return String.format(Locale.getDefault(), "T%d:E%d", season, number);
     }
 
-    // Método estático para iniciar la actividad
+    // MÃ©todo estÃ¡tico para iniciar la actividad
     public static void start(Context context, MediaItem item) {
         Intent intent = new Intent(context, DetalleActivity.class);
         intent.putExtra(EXTRA_MEDIA_ITEM, item);
         context.startActivity(intent);
     }
 }
+
 
 

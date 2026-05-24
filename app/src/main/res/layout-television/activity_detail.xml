@@ -1,219 +1,246 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- activity_detail_tv.xml — Netflix-style detail layout para TV (landscape) -->
-<!-- Coloca en: res/layout-television/ para aplicación automática en TV -->
+<!-- activity_detail_tv.xml — Netflix-style detail layout para TV (landscape)  -->
+<!-- Coloca en: res/layout-television/ para aplicación automática en TV         -->
 <FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_dark">
 
-    <!-- Backdrop full-screen -->
+    <!-- ══════════════════════════════════════════════════════════════
+         CAPA 1 — Backdrop full-screen (imagen del contenido)
+         scaleType fitCenter para TV; el gradiente encima oscurece
+    ══════════════════════════════════════════════════════════════ -->
     <ImageView
         android:id="@+id/iv_backdrop"
         android:layout_width="match_parent"
-
         android:layout_height="match_parent"
-        android:scaleType="fitCenter"
+        android:scaleType="centerCrop"
         android:contentDescription="@null" />
 
-    <!-- Gradiente lateral: oscurece izquierda donde va el texto -->
+    <!-- ══════════════════════════════════════════════════════════════
+         CAPA 2 — Vignette lateral: lado izquierdo muy oscuro,
+         se va aclarando hacia el centro/derecha (negro → transparente)
+    ══════════════════════════════════════════════════════════════ -->
     <View
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@drawable/gradient_tv_lateral" />
 
-    <!-- Gradiente inferior sutil -->
+    <!-- ══════════════════════════════════════════════════════════════
+         CAPA 3 — Vignette inferior sutil (para texto que baje al fondo)
+    ══════════════════════════════════════════════════════════════ -->
     <View
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@drawable/gradient_tv_bottom" />
 
-    <!-- ====== LAYOUT PRINCIPAL HORIZONTAL ====== -->
+    <!-- ══════════════════════════════════════════════════════════════
+         CAPA 4 — Overlay uniforme muy suave sobre toda la pantalla
+         Ayuda a que el texto sea legible sin destruir el backdrop
+    ══════════════════════════════════════════════════════════════ -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#26000000" />
+
+    <!-- ══════════════════════════════════════════════════════════════
+         LAYOUT PRINCIPAL HORIZONTAL
+         Panel izquierdo (hero info) + Panel derecho (episodios)
+    ══════════════════════════════════════════════════════════════ -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal">
 
-        <!-- ====== PANEL IZQUIERDO: Hero info ====== -->
+        <!-- ╔═══════════════════════════════════════════╗
+             ║  PANEL IZQUIERDO — Hero info              ║
+             ║  Ocupa ~55% del ancho total               ║
+             ╚═══════════════════════════════════════════╝ -->
         <LinearLayout
             android:layout_width="0dp"
-            android:layout_weight="1"
+            android:layout_weight="55"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:paddingStart="80dp"
-            android:paddingEnd="48dp"
-            android:paddingTop="56dp"
-            android:paddingBottom="56dp"
-            android:gravity="center_vertical">
+            android:paddingStart="56dp"
+            android:paddingEnd="40dp"
+            android:paddingTop="0dp"
+            android:paddingBottom="40dp"
+            android:gravity="bottom">
 
-            <!-- Badges: tipo y calidad -->
+            <!-- ─── Logo / maturity rating (pequeño, arriba del título) ─── -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="18dp">
+                android:layout_marginBottom="10dp">
 
+                <!-- Badge SERIE / PELÍCULA — rojo Netflix sólido -->
                 <TextView
                     android:id="@+id/tv_badge_type"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/badge_red"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:paddingTop="5dp"
-                    android:paddingBottom="5dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp"
                     android:textColor="@color/white"
-                    android:textSize="14sp"
+                    android:textSize="11sp"
                     android:textStyle="bold"
-                    android:text="SERIE"
-                    android:letterSpacing="0.10" />
+                    android:letterSpacing="0.12"
+                    android:text="SERIE" />
 
+                <!-- Badge calidad (4K / HD) — outline semitransparente -->
                 <TextView
                     android:id="@+id/tv_badge_quality"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
+                    android:layout_marginStart="8dp"
                     android:background="@drawable/badge_outline"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="3dp"
+                    android:paddingBottom="3dp"
                     android:textColor="@color/white"
-                    android:textSize="13sp"
+                    android:textSize="11sp"
                     android:textStyle="bold"
-                    android:text="4K"
-                    android:letterSpacing="0.08" />
+                    android:letterSpacing="0.08"
+                    android:text="4K" />
 
+                <!-- Badge HDR -->
                 <TextView
                     android:id="@+id/tv_badge_hdr"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="6dp"
                     android:background="@drawable/badge_outline"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="3dp"
+                    android:paddingBottom="3dp"
                     android:textColor="@color/white"
-                    android:textSize="13sp"
+                    android:textSize="11sp"
                     android:textStyle="bold"
-                    android:text="HDR"
-                    android:letterSpacing="0.08" />
+                    android:letterSpacing="0.08"
+                    android:text="HDR" />
 
             </LinearLayout>
 
-            <!-- Título hero grande -->
+            <!-- ─── Título hero — tipografía ultra-bold, tamaño Netflix ─── -->
             <TextView
                 android:id="@+id/tv_title_hero"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textColor="@color/white"
-                android:textSize="58sp"
+                android:textSize="40sp"
                 android:textStyle="bold"
-                android:lineSpacingExtra="2dp"
-                android:shadowColor="#CC000000"
-                android:shadowRadius="16"
+                android:lineSpacingMultiplier="0.95"
+                android:shadowColor="#B3000000"
+                android:shadowRadius="24"
                 android:shadowDx="0"
-                android:shadowDy="4"
+                android:shadowDy="6"
                 android:maxLines="2"
                 android:ellipsize="end"
                 android:text="Título" />
 
-            <!-- Año y temporadas (sin rating, sin clasificación) -->
+            <!-- ─── Meta: año · separador · temporadas ─── -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginTop="12dp">
+                android:layout_marginTop="10dp">
 
                 <TextView
                     android:id="@+id/tv_year_hero"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:textColor="#CCCCCC"
-                    android:textSize="17sp"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="13sp"
                     android:text="2024" />
 
+                <!-- Separador punto -->
                 <View
                     android:layout_width="4dp"
                     android:layout_height="4dp"
-                    android:layout_marginStart="14dp"
-                    android:layout_marginEnd="14dp"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginEnd="12dp"
                     android:background="@drawable/dot_separator" />
 
                 <TextView
                     android:id="@+id/tv_seasons_count"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:textColor="#CCCCCC"
-                    android:textSize="17sp"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="13sp"
                     android:text="3 temporadas" />
 
             </LinearLayout>
 
-            <!-- Sinopsis -->
-            <TextView
-                android:id="@+id/tv_synopsis"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="22dp"
-                android:textColor="#DDDDDD"
-                android:textSize="17sp"
-                android:lineSpacingExtra="6dp"
-                android:maxLines="3"
-                android:ellipsize="end"
-                android:text="Sinopsis del contenido..." />
-
-            <!-- Chips de géneros -->
+            <!-- ─── Chips de géneros ─── -->
             <LinearLayout
                 android:id="@+id/ll_genres"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="22dp" />
+                android:layout_marginTop="10dp" />
 
-            <!-- ====== BOTONES DE ACCIÓN TV ====== -->
+            <!-- ─── Sinopsis — máx 3 líneas en TV ─── -->
+            <TextView
+                android:id="@+id/tv_synopsis"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="14sp"
+                android:lineSpacingExtra="5dp"
+                android:maxLines="3"
+                android:ellipsize="end"
+                android:shadowColor="#80000000"
+                android:shadowRadius="8"
+                android:text="Sinopsis del contenido..." />
+
+            <!-- ─── BOTONES DE ACCIÓN — orden D-pad: Reproducir → Mi Lista → Me gusta ─── -->
             <!--
                 TV D-pad focus order:
-                btn_play → btn_my_list → btn_like
-                Cada botón tiene nextFocusRight/Left definido.
-                nextFocusRight del último va al rv_episodes del panel derecho.
+                  btn_play → btn_my_list → btn_like → rv_episodes (panel derecho)
+                Cada botón tiene nextFocusRight/Left definido explícitamente.
             -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginTop="36dp">
+                android:layout_marginTop="20dp">
 
-                <!-- Botón Reproducir — acción primaria -->
+                <!-- ▶ Reproducir — CTA primario rojo Netflix -->
                 <Button
                     android:id="@+id/btn_play"
-                    android:layout_width="230dp"
-                    android:layout_height="60dp"
+                    android:layout_width="190dp"
+                    android:layout_height="48dp"
                     android:background="@drawable/bg_btn_play_red_tv"
                     android:textColor="@color/white"
-                    android:textSize="18sp"
+                    android:textSize="15sp"
                     android:textStyle="bold"
-                    android:text="▶  Reproducir"
                     android:textAllCaps="false"
+                    android:text="▶  Reproducir"
                     android:focusable="true"
                     android:nextFocusRight="@+id/btn_my_list"
                     android:nextFocusDown="@+id/btn_my_list" />
 
-                <!-- Botón Mi Lista -->
+                <!-- + Mi Lista — acción secundaria -->
                 <Button
                     android:id="@+id/btn_my_list"
                     android:layout_width="wrap_content"
-                    android:layout_height="60dp"
-                    android:layout_marginStart="14dp"
-                    android:paddingStart="24dp"
-                    android:paddingEnd="24dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="10dp"
+                    android:paddingStart="22dp"
+                    android:paddingEnd="22dp"
                     android:background="@drawable/bg_btn_secondary_tv"
                     android:textColor="@color/white"
-                    android:textSize="17sp"
+                    android:textSize="14sp"
                     android:textAllCaps="false"
                     android:text="+ Mi Lista"
                     android:focusable="true"
@@ -221,17 +248,17 @@
                     android:nextFocusRight="@+id/btn_like"
                     android:nextFocusDown="@+id/btn_like" />
 
-                <!-- Botón Me gusta — usa bg_btn_secondary_tv existente, sin icono externo -->
+                <!-- 👍 Me gusta -->
                 <Button
                     android:id="@+id/btn_like"
-                    android:layout_width="60dp"
-                    android:layout_height="60dp"
-                    android:layout_marginStart="14dp"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="10dp"
                     android:background="@drawable/bg_btn_secondary_tv"
                     android:textColor="@color/white"
-                    android:textSize="20sp"
+                    android:textSize="16sp"
                     android:textAllCaps="false"
-                    android:text="+"
+                    android:text="👍"
                     android:focusable="true"
                     android:nextFocusLeft="@id/btn_my_list"
                     android:nextFocusRight="@+id/rv_episodes"
@@ -241,30 +268,42 @@
 
         </LinearLayout>
 
-        <!-- ====== PANEL DERECHO: Episodios ====== -->
+        <!-- ╔══════════════════════════════════════════╗
+             ║  PANEL DERECHO — Lista de episodios      ║
+             ║  Ancho fijo 340dp, semitransparente      ║
+             ║  Visible solo cuando es serie            ║
+             ╚══════════════════════════════════════════╝ -->
         <FrameLayout
             android:id="@+id/panel_episodes"
-            android:layout_width="360dp"
+            android:layout_width="380dp"
             android:layout_height="match_parent"
             android:background="@drawable/bg_panel_episodes"
             android:visibility="gone">
+
+            <!--
+                bg_panel_episodes debe ser un shape con:
+                  - color #CC0D0D0D  (negro ~80% opacidad)
+                  - sin border radius (ocupa altura total)
+                  - opcional: borde izquierdo de 1dp en #1AFFFFFF
+                Eso da el look "panel flotante" de Netflix sin salir del FrameLayout.
+            -->
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:orientation="vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="20dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="24dp"
                 android:paddingBottom="20dp">
 
-                <!-- Header: título + selector de temporada -->
+                <!-- Header del panel: título + selector de temporada -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:gravity="center_vertical"
-                    android:layout_marginBottom="14dp">
+                    android:layout_marginBottom="12dp">
 
                     <TextView
                         android:id="@+id/tv_episodes_title"
@@ -273,34 +312,46 @@
                         android:layout_height="wrap_content"
                         android:text="Episodios"
                         android:textColor="@color/white"
-                        android:textSize="20sp"
-                        android:textStyle="bold" />
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.02" />
 
-                    <!-- Selector de temporada focusable para D-pad -->
+                    <!--
+                        Selector de temporada:
+                        Focusable para D-pad. Al recibir foco debe escalar 1.05×
+                        y mostrar borde rojo (manejado en DetalleActivity.setupTvFocusStates)
+                    -->
                     <TextView
                         android:id="@+id/tv_season_selector"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:background="@drawable/bg_season_selector"
-                        android:paddingStart="14dp"
-                        android:paddingEnd="14dp"
-                        android:paddingTop="7dp"
-                        android:paddingBottom="7dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
                         android:textColor="@color/white"
-                        android:textSize="14sp"
+                        android:textSize="13sp"
                         android:focusable="true"
                         android:text="Temporada 1  ▾" />
 
                 </LinearLayout>
 
+                <!-- Divisor sutil bajo el header -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#1AFFFFFF"
+                    android:layout_marginBottom="6dp" />
+
                 <!--
                     RecyclerView de episodios.
-                    Cada ítem debe tener:
-                      - layout_height mínimo de 72dp para target de foco TV cómodo
-                      - focusable="true" en el ítem raíz
-                      - nextFocusLeft apuntando al btn_like del panel izquierdo
-                    El adaptador debe manejar el estado FOCUSED con un selector drawable
-                    que resalte el borde izquierdo en rojo (@color/accent_red).
+                    Requisitos del ítem (EpisodeAdapter):
+                      • layout_height mínimo 72dp (target foco TV)
+                      • focusable="true" en la raíz del ítem
+                      • nextFocusLeft → @id/btn_like (panel izquierdo)
+                      • Selector drawable con borde izquierdo rojo (#E50914)
+                        cuando el estado sea android:state_focused="true"
                 -->
                 <sv.edu.catolica.rex.ui.detalle.WrapContentRecyclerView
                     android:id="@+id/rv_episodes"
@@ -309,24 +360,34 @@
                     android:layout_weight="1"
                     android:nestedScrollingEnabled="true"
                     android:focusable="true"
-                    android:descendantFocusability="afterDescendants" />
+                    android:descendantFocusability="afterDescendants"
+                    android:clipToPadding="false"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp" />
 
             </LinearLayout>
         </FrameLayout>
 
     </LinearLayout>
 
-    <!-- Botón Volver — esquina superior izquierda, siempre visible -->
+    <!-- ══════════════════════════════════════════════════════════════
+         BOTÓN VOLVER — esquina superior izquierda, siempre visible.
+         Pequeño círculo semitransparente al estilo Netflix TV.
+         Focus: escala 1.07× (setupTvFocusStates en DetalleActivity)
+    ══════════════════════════════════════════════════════════════ -->
     <ImageView
         android:id="@+id/iv_back"
-        android:layout_width="20dp"
-        android:layout_height="20dp"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
         android:layout_gravity="top|start"
-        android:layout_margin="28dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="20dp"
         android:src="@drawable/ic_arrow_back"
         android:tint="@color/white"
         android:focusable="true"
         android:background="@drawable/bg_back_button_tv"
-        android:contentDescription="Volver" />
+        android:padding="10dp"
+        android:contentDescription="Volver"
+        android:scaleType="fitCenter" />
 
 </FrameLayout>

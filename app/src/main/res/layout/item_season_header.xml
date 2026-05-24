@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- item_season_header.xml -->
+<!--
+    item_season_header.xml — Cabecera de temporada en el RecyclerView
+    Res: res/layout/item_season_header.xml
+
+    ID requerido por EpisodeAdapter:
+      • tv_season_title → "Temporada N"
+-->
 <TextView
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tv_season_title"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="16dp"
-    android:layout_marginBottom="4dp"
-    android:paddingStart="0dp"
-    android:paddingBottom="8dp"
-    android:text="Temporada 1"
+    android:paddingStart="10dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="14dp"
+    android:paddingBottom="6dp"
     android:textColor="#E50914"
-    android:textSize="13sp"
+    android:textSize="11sp"
     android:textStyle="bold"
-    android:letterSpacing="0.08"
-    android:background="@drawable/divider_season_header" />
+    android:letterSpacing="0.14"
+    android:text="TEMPORADA 1"
+    android:focusable="false" />

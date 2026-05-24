@@ -27,6 +27,7 @@ public class AllCalidadScraper {
     private static final String TAG      = "AllCalidadScraper";
     private static final String SITE_BASE = "https://allcalidad.re";
     private static final String API_BASE  = "https://allcalidad.re/api/rest";
+    private static final String PREFERRED_SERVER_KEYWORD = "embed89";
     private static final int    TIMEOUT_MS = 30_000;
     private static final int    MAX_HTTP_ATTEMPTS = 3;
     private static final long   REQUEST_BASE_DELAY_MS = 420L;
@@ -274,11 +275,14 @@ public class AllCalidadScraper {
     public static List<String> getPlayableUrls(PlayerData playerData) {
         Set<String> urls = new LinkedHashSet<>();
         if (playerData == null) return new ArrayList<>();
-        if (playerData.embedUrl != null && !playerData.embedUrl.isEmpty())
+        if (playerData.embedUrl != null && !playerData.embedUrl.isEmpty()
+                && !isDeprecatedServerUrl(playerData.embedUrl))
             urls.add(playerData.embedUrl);
         if (playerData.servers != null) {
             for (Server s : playerData.servers)
-                if (s != null && s.url != null && !s.url.isEmpty()) urls.add(s.url);
+                if (s != null && s.url != null && !s.url.isEmpty() && !isDeprecatedServerUrl(s.url)) {
+                    urls.add(s.url);
+                }
         }
         return new ArrayList<>(urls);
     }
@@ -432,6 +436,7 @@ public class AllCalidadScraper {
                 Object item = arr.get(i);
                 if (item instanceof JSONObject) addServerFromJson(pd, (JSONObject) item, "Servidor " + (i + 1));
             }
+            applyPreferredServerPolicy(pd);
             return;
         }
         if (!(dataObj instanceof JSONObject)) return;
@@ -459,6 +464,7 @@ public class AllCalidadScraper {
         }
         if ((pd.embedUrl == null || pd.embedUrl.isEmpty()) && !pd.servers.isEmpty())
             pd.embedUrl = pd.servers.get(0).url;
+        applyPreferredServerPolicy(pd);
     }
 
     private static void addServerFromJson(PlayerData pd, JSONObject j, String fallback) {
@@ -474,6 +480,65 @@ public class AllCalidadScraper {
         s.name = (name == null || name.isEmpty()) ? "Servidor" : name;
         s.url  = normalized;
         pd.servers.add(s);
+    }
+
+    private static void applyPreferredServerPolicy(PlayerData pd) {
+        if (pd == null) return;
+
+        String chosenName = null;
+        String chosenUrl = null;
+
+        if (pd.servers != null) {
+            for (Server s : pd.servers) {
+                if (s == null || s.url == null || s.url.isEmpty()) continue;
+                if (isDeprecatedServerUrl(s.url)) continue;
+                if (isPreferredServer(s.name, s.url)) {
+                    chosenName = s.name;
+                    chosenUrl = s.url;
+                    break;
+                }
+            }
+            if ((chosenUrl == null || chosenUrl.isEmpty()) && !pd.servers.isEmpty()) {
+                for (Server first : pd.servers) {
+                    if (first == null || first.url == null || first.url.isEmpty()) continue;
+                    if (isDeprecatedServerUrl(first.url)) continue;
+                    chosenName = first.name;
+                    chosenUrl = first.url;
+                    break;
+                }
+            }
+        }
+
+        if ((chosenUrl == null || chosenUrl.isEmpty())
+                && pd.embedUrl != null && !pd.embedUrl.isEmpty()
+                && !isDeprecatedServerUrl(pd.embedUrl)) {
+            chosenName = "Embed";
+            chosenUrl = pd.embedUrl;
+        }
+
+        if (chosenUrl == null || chosenUrl.isEmpty()) return;
+
+        pd.embedUrl = chosenUrl;
+        if (pd.servers == null) {
+            pd.servers = new ArrayList<>();
+        } else {
+            pd.servers.clear();
+        }
+        Server only = new Server();
+        only.name = (chosenName == null || chosenName.isEmpty()) ? "Servidor 1" : chosenName;
+        only.url = chosenUrl;
+        pd.servers.add(only);
+    }
+
+    private static boolean isPreferredServer(String name, String url) {
+        String n = name == null ? "" : name.toLowerCase();
+        String u = url == null ? "" : url.toLowerCase();
+        return n.contains(PREFERRED_SERVER_KEYWORD) || u.contains(PREFERRED_SERVER_KEYWORD);
+    }
+
+    private static boolean isDeprecatedServerUrl(String url) {
+        if (url == null) return false;
+        return url.toLowerCase().contains("embed69.org");
     }
 
     private static String normalizeUrl(String raw) {

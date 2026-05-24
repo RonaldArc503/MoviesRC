@@ -20,7 +20,18 @@ public class WrapContentRecyclerView extends RecyclerView {
 
     @Override
     protected void onMeasure(int widthSpec, int heightSpec) {
-        int expandSpec = MeasureSpec.makeMeasureSpec(Integer.MAX_VALUE >> 2, MeasureSpec.AT_MOST);
-        super.onMeasure(widthSpec, expandSpec);
+        boolean wrapContentHeight = getLayoutParams() != null
+                && getLayoutParams().height == LayoutParams.WRAP_CONTENT;
+        int mode = MeasureSpec.getMode(heightSpec);
+
+        // Only force wrap-content behavior when the parent truly requests WRAP_CONTENT.
+        // For MATCH_PARENT/weighted containers this avoids measuring an unbounded height.
+        if (wrapContentHeight && mode != MeasureSpec.EXACTLY) {
+            int expandSpec = MeasureSpec.makeMeasureSpec(Integer.MAX_VALUE >> 2, MeasureSpec.AT_MOST);
+            super.onMeasure(widthSpec, expandSpec);
+            return;
+        }
+
+        super.onMeasure(widthSpec, heightSpec);
     }
 }

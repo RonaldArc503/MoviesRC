@@ -45,6 +45,8 @@ public class TvSearchActivity extends AppCompatActivity {
         searchView = findViewById(R.id.search_view);
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
+        rvSections.setHasFixedSize(true);
+        rvSections.setItemAnimator(null);
         adapter = new HomeAdapter(this, new ArrayList<>(),
                 item -> DetalleActivity.start(TvSearchActivity.this, item), true);
         rvSections.setAdapter(adapter);
@@ -200,7 +202,7 @@ public class TvSearchActivity extends AppCompatActivity {
                         return;
                     }
                     if (adapter != null) {
-                        adapter.notifySectionsChanged();
+                        adapter.notifyDataSetChanged();
                     }
                 });
             } catch (Exception e) {
@@ -279,9 +281,13 @@ public class TvSearchActivity extends AppCompatActivity {
     }
 
     private void showSections(List<Section> sections) {
-        adapter = new HomeAdapter(this, sections,
-                item -> DetalleActivity.start(TvSearchActivity.this, item), true);
-        rvSections.setAdapter(adapter);
+        if (adapter == null) {
+            adapter = new HomeAdapter(this, sections,
+                    item -> DetalleActivity.start(TvSearchActivity.this, item), true);
+            rvSections.setAdapter(adapter);
+            return;
+        }
+        adapter.setSections(sections);
     }
 
     @Override

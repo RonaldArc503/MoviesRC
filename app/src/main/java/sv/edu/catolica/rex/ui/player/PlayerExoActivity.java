@@ -14,22 +14,37 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.cache.CacheDataSource;
+import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
 import java.util.ArrayList;
+import java.util.Map;
 import sv.edu.catolica.rex.R;
 
 public class PlayerExoActivity extends AppCompatActivity {
 
     private static final String EXTRA_URLS = "exo_urls";
     private static final String EXTRA_TITLE = "exo_title";
+    private static final int TIMEOUT_MS = 20_000;
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13; SmartTV) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
     private PlayerView playerView;
     private ProgressBar progressBar;
     private ExoPlayer player;
+    private DefaultHttpDataSource.Factory httpDataSourceFactory;
+    private CacheDataSource.Factory cacheDataSourceFactory;
+    private DefaultBandwidthMeter bandwidthMeter;
+    private DefaultLoadControl loadControl;
     private final ArrayList<String> urls = new ArrayList<>();
     private int currentUrlIndex = 0;
 
@@ -73,7 +88,29 @@ public class PlayerExoActivity extends AppCompatActivity {
     }
 
     private void setupPlayer() {
-        player = new ExoPlayer.Builder(this).build();
+        // Shared network stack tuned for smoother playback and lower startup jitter.
+        httpDataSourceFactory = PlaybackCacheHelper.newHttpDataSourceFactory(null);
+        cacheDataSourceFactory = PlaybackCacheHelper.newCacheDataSourceFactory(this, httpDataSourceFactory);
+
+        // Buffer policy:
+        // - minBufferMs: 15s before playback starts, so short stalls do not hit immediately.
+        // - maxBufferMs: 60s cap to avoid over-buffering and memory pressure.
+        // - bufferForPlaybackMs: 15s initial startup threshold for aggressive prebuffering.
+        // - bufferForPlaybackAfterRebufferMs: 8s before resuming after a stall.
+        // - backBuffer: 30s retained behind the playhead for fast seek-back.
+        loadControl = new DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15_000, 60_000, 15_000, 8_000)
+            .setBackBuffer(30_000, true)
+            .build();
+
+        bandwidthMeter = new DefaultBandwidthMeter.Builder(this).build();
+
+        player = new ExoPlayer.Builder(this)
+            .setLoadControl(loadControl)
+            .setBandwidthMeter(bandwidthMeter)
+            .setMediaSourceFactory(new DefaultMediaSourceFactory(cacheDataSourceFactory))
+                .build();
+        player.setWakeMode(C.WAKE_MODE_NETWORK);
         playerView.setPlayer(player);
         playerView.setUseController(true);
         playerView.setControllerAutoShow(true);
@@ -106,6 +143,11 @@ public class PlayerExoActivity extends AppCompatActivity {
         }
 
         String url = urls.get(currentUrlIndex);
+        Map<String, String> headers = buildPlaybackHeaders(url);
+        if (httpDataSourceFactory != null) {
+            httpDataSourceFactory.setDefaultRequestProperties(headers);
+        }
+
         MediaItem mediaItem = new MediaItem.Builder()
                 .setUri(Uri.parse(url))
                 .build();
@@ -127,6 +169,10 @@ public class PlayerExoActivity extends AppCompatActivity {
         finish();
     }
 
+    private Map<String, String> buildPlaybackHeaders(String url) {
+        return PlaybackCacheHelper.buildPlaybackHeaders(url);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -146,6 +192,7 @@ public class PlayerExoActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        PlaybackCacheHelper.cancelPreload();
         if (player != null) {
             player.release();
             player = null;

@@ -50,7 +50,7 @@ public class DetalleContenidoActivity extends AppCompatActivity {
         btnPlay = findViewById(R.id.btn_play);
 
         rvEpisodes.setLayoutManager(new LinearLayoutManager(this));
-        episodeAdapter = new EpisodeAdapter(this::loadEpisodeServers);
+        episodeAdapter = new EpisodeAdapter(this::loadEpisodeServers, rvEpisodes);
         rvEpisodes.setAdapter(episodeAdapter);
 
         mediaItem = (MediaItem) getIntent().getSerializableExtra(EXTRA_MEDIA_ITEM);
@@ -141,6 +141,7 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                     tvSynopsis.setText(desc);
 
                     isSeriesContent = finalIsSeries;
+                    episodeAdapter.setSeriesPoster(finalPoster);
                     bindSeasons(finalSeasons, finalIsSeries);
 
                     playUrls.clear();
@@ -197,7 +198,8 @@ public class DetalleContenidoActivity extends AppCompatActivity {
                         DetalleContenidoActivity.this,
                         mediaItem,
                         episode.seasonNumber,
-                        episode.episodeNumber
+                        episode.episodeNumber,
+                        episode.id
                 );
                 if (urls == null || urls.isEmpty()) {
                     if (mediaItem.getPostId() > 0) {
