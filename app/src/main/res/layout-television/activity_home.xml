@@ -100,7 +100,7 @@
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
-                android:src="@drawable/ic_tv"
+                android:src="@drawable/ic_chanels"
                 android:tint="#8A8F9E" />
         </LinearLayout>
 
@@ -120,7 +120,7 @@
                 <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
-                android:src="@drawable/ic_football"
+                android:src="@drawable/ic_sports"
                 android:tint="#8A8F9E" />
             </LinearLayout>
 
@@ -161,7 +161,7 @@
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
-                android:src="@drawable/ic_tv"
+                android:src="@drawable/ic_series"
                 android:tint="#8A8F9E" />
         </LinearLayout>
 
