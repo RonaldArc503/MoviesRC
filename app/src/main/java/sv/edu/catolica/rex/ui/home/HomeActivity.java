@@ -31,6 +31,7 @@ import sv.edu.catolica.rex.models.Section;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
 import sv.edu.catolica.rex.network.smart.PelispediaScraper;
+import sv.edu.catolica.rex.ui.football.FootballActivity;
 import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
 //import sv.edu.catolica.rex.ui.detalle.DetalleContenidoActivity;
 
@@ -54,6 +55,7 @@ public class HomeActivity extends AppCompatActivity {
     private View menuHome;
     private View menuBuscar;
     private View menuCanales;
+    private View menuFootball;
     private View menuCategorias;
     private View menuSeries;
     private View menuDoramas;
@@ -168,13 +170,14 @@ public class HomeActivity extends AppCompatActivity {
         menuHome = findViewById(R.id.menu_home);
         menuBuscar = findViewById(R.id.menu_buscar);
         menuCanales = findViewById(R.id.menu_canales);
+        menuFootball = findViewById(R.id.menu_football);
         menuCategorias = findViewById(R.id.menu_categorias);
         menuSeries = findViewById(R.id.menu_series);
         menuDoramas = findViewById(R.id.menu_doramas);
         menuAjustes = findViewById(R.id.menu_ajustes);
 
         if (menuHome == null || menuBuscar == null || menuCanales == null || menuCategorias == null
-                || menuSeries == null || menuDoramas == null) {
+                || menuFootball == null || menuSeries == null || menuDoramas == null) {
             return;
         }
 
@@ -201,6 +204,11 @@ public class HomeActivity extends AppCompatActivity {
             startActivity(new Intent(HomeActivity.this, TvChannelsActivity.class));
         });
 
+        menuFootball.setOnClickListener(v -> {
+            setTvMenuSelected(menuFootball);
+            startActivity(new Intent(HomeActivity.this, FootballActivity.class));
+        });
+
         menuCategorias.setOnClickListener(v -> {
             handleTvMenuPlaceholder(menuCategorias);
         });
@@ -221,7 +229,7 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void setTvMenuSelected(View selectedItem) {
-        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuCategorias, menuSeries, menuDoramas, menuAjustes};
+        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuFootball, menuCategorias, menuSeries, menuDoramas, menuAjustes};
         for (View item : items) {
             if (item == null) {
                 continue;
@@ -263,13 +271,14 @@ public class HomeActivity extends AppCompatActivity {
         menuHome = findViewById(R.id.menu_home);
         menuBuscar = findViewById(R.id.menu_buscar);
         menuCanales = findViewById(R.id.menu_canales);
+        menuFootball = findViewById(R.id.menu_football);
         menuCategorias = findViewById(R.id.menu_categorias);
         menuSeries = findViewById(R.id.menu_series);
         menuDoramas = findViewById(R.id.menu_doramas);
         menuAjustes = findViewById(R.id.menu_ajustes);
 
         if (menuHome == null || menuBuscar == null || menuCanales == null || menuCategorias == null
-                || menuSeries == null || menuDoramas == null) {
+                || menuFootball == null || menuSeries == null || menuDoramas == null) {
             return;
         }
 
@@ -294,6 +303,11 @@ public class HomeActivity extends AppCompatActivity {
         menuCanales.setOnClickListener(v -> {
             setTvMenuSelected(menuCanales);
             startActivity(new Intent(HomeActivity.this, TvChannelsActivity.class));
+        });
+
+        menuFootball.setOnClickListener(v -> {
+            setTvMenuSelected(menuFootball);
+            startActivity(new Intent(HomeActivity.this, FootballActivity.class));
         });
 
         menuCategorias.setOnClickListener(v -> {

@@ -380,11 +380,15 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 } else if (!primaryPosterUrl.equals(httpsFallbackUrl)) {
                     Glide.with(itemView.getContext())
                             .load(primaryPosterUrl)
-                            .transition(DrawableTransitionOptions.withCrossFade(120))
+                            .transition(isTv
+                                    ? DrawableTransitionOptions.withCrossFade(0)
+                                    : DrawableTransitionOptions.withCrossFade(120))
                             .placeholder(R.drawable.placeholder_poster)
+                            .override(isTv ? 300 : 260, isTv ? 450 : 390)
                             .error(Glide.with(itemView.getContext())
                                     .load(httpsFallbackUrl)
                                     .placeholder(R.drawable.placeholder_poster)
+                                    .override(isTv ? 300 : 260, isTv ? 450 : 390)
                                     .error(R.drawable.placeholder_poster)
                                     .centerCrop())
                             .centerCrop()
@@ -392,8 +396,11 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 } else {
                     Glide.with(itemView.getContext())
                             .load(primaryPosterUrl)
-                            .transition(DrawableTransitionOptions.withCrossFade(120))
+                            .transition(isTv
+                                    ? DrawableTransitionOptions.withCrossFade(0)
+                                    : DrawableTransitionOptions.withCrossFade(120))
                             .placeholder(R.drawable.placeholder_poster)
+                            .override(isTv ? 300 : 260, isTv ? 450 : 390)
                             .error(R.drawable.placeholder_poster)
                             .centerCrop()
                             .into(ivPoster);
@@ -434,8 +441,8 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                         return false;
                     }
                     if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && itemPos <= 0) {
-                        // Keep horizontal focus bounded to the current row.
-                        return true;
+                        // Permitir que el foco salga hacia la izquierda (sidebar de menú)
+                        return false;
                     }
                     if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && itemPos >= totalItems - 1) {
                         // Keep focus on row end instead of jumping to unrelated rows.

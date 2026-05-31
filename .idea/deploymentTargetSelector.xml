@@ -4,10 +4,10 @@
     <selectionStates>
       <SelectionState runConfigName="app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-05-24T18:38:57.219387700Z">
+        <DropdownSelection timestamp="2026-05-30T19:25:12.123805700Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\HP VICTUS\.android\avd\Television_1080p.avd" />
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=bb3ad80" />
             </handle>
           </Target>
         </DropdownSelection>

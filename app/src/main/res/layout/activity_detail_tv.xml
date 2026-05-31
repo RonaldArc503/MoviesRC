@@ -179,7 +179,7 @@
                 android:layout_marginTop="36dp">
 
                 <!-- Botón Reproducir (grande, TV) -->
-                <Button
+                <androidx.appcompat.widget.AppCompatButton
                     android:id="@+id/btn_play"
                     android:layout_width="220dp"
                     android:layout_height="56dp"
@@ -193,7 +193,7 @@
                     android:nextFocusRight="@+id/btn_my_list" />
 
                 <!-- Botón Mi Lista -->
-                <Button
+                <androidx.appcompat.widget.AppCompatButton
                     android:id="@+id/btn_my_list"
                     android:layout_width="180dp"
                     android:layout_height="56dp"

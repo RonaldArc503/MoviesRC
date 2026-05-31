@@ -104,6 +104,26 @@
                 android:tint="#8A8F9E" />
         </LinearLayout>
 
+            <LinearLayout
+                android:id="@+id/menu_football"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:layout_marginTop="4dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:background="@drawable/bg_tv_menu_item"
+                android:nextFocusUp="@id/menu_canales"
+                android:nextFocusDown="@id/menu_categorias">
+
+                <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_football"
+                android:tint="#8A8F9E" />
+            </LinearLayout>
+
         <LinearLayout
             android:id="@+id/menu_categorias"
             android:layout_width="match_parent"
@@ -114,7 +134,7 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusUp="@id/menu_canales"
+            android:nextFocusUp="@id/menu_football"
             android:nextFocusDown="@id/menu_series">
 
             <ImageView

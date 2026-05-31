@@ -33,6 +33,7 @@ public class PlayerExoActivity extends AppCompatActivity {
 
     private static final String EXTRA_URLS = "exo_urls";
     private static final String EXTRA_TITLE = "exo_title";
+    private static final String EXTRA_DISABLE_CACHE = "exo_disable_cache";
     private static final int TIMEOUT_MS = 20_000;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Linux; Android 13; SmartTV) AppleWebKit/537.36 " +
@@ -47,11 +48,17 @@ public class PlayerExoActivity extends AppCompatActivity {
     private DefaultLoadControl loadControl;
     private final ArrayList<String> urls = new ArrayList<>();
     private int currentUrlIndex = 0;
+    private boolean disableCache;
 
     public static void start(Context context, ArrayList<String> streamUrls, String title) {
+        start(context, streamUrls, title, false);
+    }
+
+    public static void start(Context context, ArrayList<String> streamUrls, String title, boolean disableCache) {
         Intent intent = new Intent(context, PlayerExoActivity.class);
         intent.putStringArrayListExtra(EXTRA_URLS, streamUrls);
         intent.putExtra(EXTRA_TITLE, title);
+        intent.putExtra(EXTRA_DISABLE_CACHE, disableCache);
         context.startActivity(intent);
     }
 
@@ -64,6 +71,7 @@ public class PlayerExoActivity extends AppCompatActivity {
 
         playerView = findViewById(R.id.player_view);
         progressBar = findViewById(R.id.buffer_progress);
+        disableCache = getIntent().getBooleanExtra(EXTRA_DISABLE_CACHE, false);
 
         ArrayList<String> incoming = getIntent().getStringArrayListExtra(EXTRA_URLS);
         if (incoming != null) {
@@ -90,16 +98,14 @@ public class PlayerExoActivity extends AppCompatActivity {
     private void setupPlayer() {
         // Shared network stack tuned for smoother playback and lower startup jitter.
         httpDataSourceFactory = PlaybackCacheHelper.newHttpDataSourceFactory(null);
-        cacheDataSourceFactory = PlaybackCacheHelper.newCacheDataSourceFactory(this, httpDataSourceFactory);
+        cacheDataSourceFactory = disableCache
+            ? null
+            : PlaybackCacheHelper.newCacheDataSourceFactory(this, httpDataSourceFactory);
 
-        // Buffer policy:
-        // - minBufferMs: 15s before playback starts, so short stalls do not hit immediately.
-        // - maxBufferMs: 60s cap to avoid over-buffering and memory pressure.
-        // - bufferForPlaybackMs: 15s initial startup threshold for aggressive prebuffering.
-        // - bufferForPlaybackAfterRebufferMs: 8s before resuming after a stall.
-        // - backBuffer: 30s retained behind the playhead for fast seek-back.
+        // Live streams need a short startup buffer; long initial buffering makes
+        // channels look stuck and can fall behind the live edge.
         loadControl = new DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 60_000, 15_000, 8_000)
+            .setBufferDurationsMs(5_000, 30_000, 1_500, 3_000)
             .setBackBuffer(30_000, true)
             .build();
 
@@ -108,7 +114,8 @@ public class PlayerExoActivity extends AppCompatActivity {
         player = new ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
             .setBandwidthMeter(bandwidthMeter)
-            .setMediaSourceFactory(new DefaultMediaSourceFactory(cacheDataSourceFactory))
+            .setMediaSourceFactory(new DefaultMediaSourceFactory(
+                    cacheDataSourceFactory != null ? cacheDataSourceFactory : httpDataSourceFactory))
                 .build();
         player.setWakeMode(C.WAKE_MODE_NETWORK);
         playerView.setPlayer(player);

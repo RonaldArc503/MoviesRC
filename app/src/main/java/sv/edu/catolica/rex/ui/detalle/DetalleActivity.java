@@ -89,7 +89,10 @@ public class DetalleActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
 
         isTV = isTelevision();
-        setContentView(R.layout.activity_detail); // Android selecciona automÃ¡tico segÃºn carpeta
+        setContentView(R.layout.activity_detail); // Android selecciona automático según carpeta
+        if (findViewById(R.id.panel_episodes) != null) {
+            isTV = true;
+        }
 
         bindViews();
         setupToolbar();

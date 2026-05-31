@@ -120,6 +120,24 @@
                 android:tint="#8A8F9E" />
         </LinearLayout>
 
+            <LinearLayout
+                android:id="@+id/menu_football"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_tv_menu_item"
+                android:clickable="true"
+                android:focusable="false"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_football"
+                android:tint="#8A8F9E" />
+            </LinearLayout>
+
         <LinearLayout
             android:id="@+id/menu_categorias"
             android:layout_width="0dp"

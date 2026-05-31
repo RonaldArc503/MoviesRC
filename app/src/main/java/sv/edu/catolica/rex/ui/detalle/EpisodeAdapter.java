@@ -14,7 +14,9 @@ import java.util.ArrayList;
 import java.util.List;
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
-// Glide removed for compatibility with current layout variants
+import com.bumptech.glide.Glide;
+import com.bumptech.glide.load.engine.DiskCacheStrategy;
+import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
 
 public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
@@ -139,7 +141,26 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             }
         });
 
-        // No thumbnail handling here — layouts in this variant don't include thumbnail views.
+        // Cargar poster del episodio (stillUrl) o poster de la serie como fallback
+        if (episodeHolder.ivPoster != null) {
+            String episodePoster = (episode != null && episode.stillUrl != null
+                    && !episode.stillUrl.trim().isEmpty()) ? episode.stillUrl.trim() : "";
+            String posterToLoad = !episodePoster.isEmpty() ? episodePoster
+                    : (seriesPosterUrl != null && !seriesPosterUrl.isEmpty() ? seriesPosterUrl : "");
+            if (!posterToLoad.isEmpty()) {
+                Glide.with(episodeHolder.itemView.getContext())
+                        .load(posterToLoad)
+                        .transition(DrawableTransitionOptions.withCrossFade(100))
+                        .placeholder(R.drawable.placeholder_poster)
+                        .error(R.drawable.placeholder_poster)
+                        .diskCacheStrategy(DiskCacheStrategy.ALL)
+                        .override(160, 100)
+                        .centerCrop()
+                        .into(episodeHolder.ivPoster);
+            } else {
+                episodeHolder.ivPoster.setImageResource(R.drawable.placeholder_poster);
+            }
+        }
     }
 
     @Override
@@ -198,11 +219,13 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     static class EpisodeViewHolder extends RecyclerView.ViewHolder {
         TextView tvCode;
         TextView tvTitle;
+        ImageView ivPoster;
         
         EpisodeViewHolder(@NonNull View itemView) {
             super(itemView);
             tvCode = itemView.findViewById(R.id.tv_episode_code);
             tvTitle = itemView.findViewById(R.id.tv_episode_title);
+            ivPoster = itemView.findViewById(R.id.iv_episode_poster);
         }
     }
 

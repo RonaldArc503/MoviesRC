@@ -216,12 +216,12 @@
                 android:layout_marginTop="20dp">
 
                 <!-- ▶ Reproducir — CTA primario rojo Netflix -->
-                <Button
+                <androidx.appcompat.widget.AppCompatButton
                     android:id="@+id/btn_play"
                     android:layout_width="190dp"
                     android:layout_height="48dp"
                     android:background="@drawable/bg_btn_play_red_tv"
-                    android:textColor="@color/white"
+                    android:textColor="@color/btn_play_text_tv"
                     android:textSize="15sp"
                     android:textStyle="bold"
                     android:textAllCaps="false"
@@ -231,7 +231,7 @@
                     android:nextFocusDown="@+id/btn_my_list" />
 
                 <!-- + Mi Lista — acción secundaria -->
-                <Button
+                <androidx.appcompat.widget.AppCompatButton
                     android:id="@+id/btn_my_list"
                     android:layout_width="wrap_content"
                     android:layout_height="48dp"
@@ -249,7 +249,7 @@
                     android:nextFocusDown="@+id/btn_like" />
 
                 <!-- 👍 Me gusta -->
-                <Button
+                <androidx.appcompat.widget.AppCompatButton
                     android:id="@+id/btn_like"
                     android:layout_width="48dp"
                     android:layout_height="48dp"

@@ -61,6 +61,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private static final double NEXT_EPISODE_HIDE_HYSTERESIS_SEC = 12d;
     private static final double AUTO_NEXT_REMAINING_SEC = 1.2d;
     private static final String NEXT_EPISODE_LABEL_BASE = "Siguiente episodio";
+    /** Tiempo de inactividad en TV antes de ocultar los controles del player (ms) */
+    private static final long TV_CONTROLS_HIDE_DELAY_MS = 3500L;
 
     private WebView webView;
     private ProgressBar progressBar;
@@ -93,6 +95,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private boolean exoSwitchInProgress = false;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
+    private final Runnable tvHideControlsRunnable = this::injectTvControlsHide;
 
     private NextEpisodeInfo nextEpisodeInfo;
 
@@ -345,6 +348,9 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
                 triggerAutoPlayAttempts();
                 startPlaybackMonitor();
+                if (isTvDevice) {
+                    scheduleTvControlsHide();
+                }
             }
 
             @Override
@@ -1312,10 +1318,20 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     @Override
+    public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        // En TV: cada pulsación de tecla reinicia el temporizador de ocultar controles
+        if (isTvDevice && pageLoaded) {
+            scheduleTvControlsHide();
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     protected void onDestroy() {
         cancelServerTimeout();
         handler.removeCallbacks(autoPlayRunnable);
         handler.removeCallbacks(playbackMonitorRunnable);
+        handler.removeCallbacks(tvHideControlsRunnable);
         setPlaybackResult();
         if (webView != null) {
             webView.destroy();
@@ -1328,6 +1344,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         super.onPause();
         resumed = false;
         handler.removeCallbacks(playbackMonitorRunnable);
+        handler.removeCallbacks(tvHideControlsRunnable);
         if (webView != null) {
             webView.onPause();
         }
@@ -1344,6 +1361,9 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (pageLoaded) {
             triggerAutoPlayAttempts();
             startPlaybackMonitor();
+            if (isTvDevice) {
+                scheduleTvControlsHide();
+            }
         }
     }
 
@@ -1386,6 +1406,46 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
         int uiMode = getResources().getConfiguration().uiMode;
         return (uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION;
+    }
+
+    // ── TV: auto-ocultar controles del reproductor por inactividad ──────────────
+
+    private void scheduleTvControlsHide() {
+        handler.removeCallbacks(tvHideControlsRunnable);
+        handler.postDelayed(tvHideControlsRunnable, TV_CONTROLS_HIDE_DELAY_MS);
+    }
+
+    /**
+     * Inyecta JS que simula mouseleave/mouseout para que el reproductor
+     * oculte sus controles de forma nativa, y aplica un fade-out de CSS
+     * sobre cualquier barra de controles restante.
+     */
+    private void injectTvControlsHide() {
+        if (webView == null || !pageLoaded || isFinishing() || isDestroyed()) {
+            return;
+        }
+        String js = "(function(){"
+                + "try{"
+                // Simular inactividad de mouse para reproductores que escuchan eventos de ratón
+                + "var el=document.elementFromPoint(window.innerWidth/2,window.innerHeight/2)||document.body;"
+                + "var evOpts={bubbles:true,cancelable:true,clientX:-1,clientY:-1};"
+                + "el.dispatchEvent(new MouseEvent('mousemove',evOpts));"
+                + "el.dispatchEvent(new MouseEvent('mouseleave',{bubbles:false}));"
+                + "el.dispatchEvent(new MouseEvent('mouseout',{bubbles:true}));"
+                + "document.dispatchEvent(new MouseEvent('mouseleave',{bubbles:false}));"
+                // JWPlayer: ocultar controles mediante API
+                + "try{"
+                + "  if(window.jwplayer){"
+                + "    var jw=window.jwplayer();"
+                + "    if(jw&&typeof jw.setControls==='function')jw.setControls(false);"
+                + "  }"
+                + "}catch(e){}"
+                // Ocultar controles nativos de <video> via setAttribute
+                + "var vids=document.querySelectorAll('video');"
+                + "for(var i=0;i<vids.length;i++){try{vids[i].removeAttribute('controls');}catch(e){}}"
+                + "}catch(e){}"
+                + "})();";
+        webView.evaluateJavascript(js, null);
     }
 }
 
