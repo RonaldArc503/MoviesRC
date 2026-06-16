@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Gradiente superior oscuro para difuminar el toolbar sobre el hero banner
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="270"
+        android:startColor="#D0000000"
+        android:centerColor="#60000000"
+        android:endColor="#00000000"
+        android:type="linear" />
+</shape>

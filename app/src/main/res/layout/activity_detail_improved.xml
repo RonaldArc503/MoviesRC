@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    activity_detalle_contenido.xml – Pantalla de detalles estilo Netflix
-    Incluye: banner hero con backdrop, gradiente, metadata, sinopsis,
-             botones de acción, episodios y contenido relacionado
+    Mejoras de rendimiento sugeridas para activity_detail.xml
+    - Uso de ConstraintLayout para mejor rendimiento
+    - Reducción de niveles de anidación
+    - ViewStub para vistas condicionales
 -->
 <androidx.coordinatorlayout.widget.CoordinatorLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
@@ -22,7 +23,7 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <!-- ══════ HERO BANNER ══════ -->
+            <!-- ══════ HERO BANNER CON BACKDROP ══════ -->
             <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="560dp">
@@ -41,7 +42,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="200dp"
                     android:layout_gravity="top"
-                    android:background="@drawable/gradient_hero_fade" />
+                    android:background="@drawable/gradient_toolbar_fade" />
 
                 <!-- Gradiente inferior para contenido -->
                 <View
@@ -50,9 +51,19 @@
                     android:layout_gravity="bottom"
                     android:background="@drawable/bg_hero_gradient" />
 
-                <!-- Botón de regresar -->
+                <!-- Toolbar transparente (mobile) -->
+                <androidx.appcompat.widget.Toolbar
+                    android:id="@+id/toolbar"
+                    android:layout_width="match_parent"
+                    android:layout_height="?attr/actionBarSize"
+                    android:layout_gravity="top"
+                    android:background="@android:color/transparent"
+                    app:navigationIcon="@drawable/ic_arrow_back"
+                    app:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar" />
+
+                <!-- Botón de regresar (TV) -->
                 <ImageView
-                    android:id="@+id/btn_back"
+                    android:id="@+id/iv_back"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_gravity="top|start"
@@ -62,9 +73,10 @@
                     android:background="@drawable/bg_back_button_tv"
                     android:clickable="true"
                     android:focusable="true"
+                    android:visibility="gone"
                     android:contentDescription="Volver" />
 
-                <!-- Contenido del banner -->
+                <!-- Contenido del hero banner -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -74,21 +86,47 @@
                     android:paddingEnd="20dp"
                     android:paddingBottom="24dp">
 
-                    <!-- Póster pequeño (opcional) -->
-                    <ImageView
-                        android:id="@+id/iv_poster"
-                        android:layout_width="120dp"
-                        android:layout_height="180dp"
-                        android:layout_marginBottom="16dp"
-                        android:scaleType="centerCrop"
-                        android:src="@drawable/placeholder_poster"
-                        android:elevation="4dp"
-                        android:visibility="gone"
-                        android:contentDescription="Poster" />
+                    <!-- Badges (tipo y calidad) -->
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="12dp">
+
+                        <TextView
+                            android:id="@+id/tv_badge_type"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="PELÍCULA"
+                            android:textColor="@color/white"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:background="@drawable/badge_red"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp"
+                            android:layout_marginEnd="8dp" />
+
+                        <TextView
+                            android:id="@+id/tv_badge_quality"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="HD"
+                            android:textColor="@color/accentGold"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:background="@drawable/badge_outline"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp" />
+
+                    </LinearLayout>
 
                     <!-- Título -->
                     <TextView
-                        android:id="@+id/tv_title"
+                        android:id="@+id/tv_title_hero"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="Título del Contenido"
@@ -103,7 +141,7 @@
                         android:maxLines="3"
                         android:ellipsize="end" />
 
-                    <!-- Metadata (año, rating, duración) -->
+                    <!-- Metadata (año, rating, temporadas) -->
                     <LinearLayout
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
@@ -112,7 +150,7 @@
                         android:gravity="center_vertical">
 
                         <TextView
-                            android:id="@+id/tv_year"
+                            android:id="@+id/tv_year_hero"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="2024"
@@ -134,23 +172,14 @@
                             android:text="★ 8.5"
                             android:textColor="@color/ratingGold"
                             android:textSize="15sp"
-                            android:textStyle="bold"
-                            android:visibility="gone" />
-
-                        <View
-                            android:id="@+id/dot_separator_2"
-                            android:layout_width="5dp"
-                            android:layout_height="5dp"
-                            android:layout_marginStart="12dp"
-                            android:layout_marginEnd="12dp"
-                            android:background="@drawable/dot_separator"
-                            android:visibility="gone" />
+                            android:textStyle="bold" />
 
                         <TextView
-                            android:id="@+id/tv_duration"
+                            android:id="@+id/tv_seasons_count"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="120 min"
+                            android:layout_marginStart="12dp"
+                            android:text="3 Temporadas"
                             android:textColor="@color/textSecondary"
                             android:textSize="14sp"
                             android:visibility="gone" />
@@ -193,20 +222,19 @@
                         android:textAllCaps="false"
                         android:elevation="2dp" />
 
-                    <!-- Botón compartir o secundario -->
+                    <!-- Botón Mi Lista -->
                     <androidx.appcompat.widget.AppCompatButton
-                        android:id="@+id/btn_share"
+                        android:id="@+id/btn_my_list"
                         android:layout_width="0dp"
                         android:layout_height="54dp"
                         android:layout_weight="1"
                         android:layout_marginStart="10dp"
                         android:background="@drawable/bg_btn_secondary"
-                        android:text="Compartir"
+                        android:text="+ Mi Lista"
                         android:textColor="@color/white"
                         android:textSize="16sp"
                         android:textStyle="bold"
-                        android:textAllCaps="false"
-                        android:visibility="gone" />
+                        android:textAllCaps="false" />
 
                 </LinearLayout>
 
@@ -215,22 +243,78 @@
                     android:id="@+id/tv_synopsis"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="28dp"
+                    android:layout_marginBottom="8dp"
                     android:text="Sinopsis del contenido..."
                     android:textColor="@color/textSecondary"
                     android:textSize="14sp"
-                    android:lineSpacingExtra="4dp" />
+                    android:lineSpacingExtra="4dp"
+                    android:maxLines="4"
+                    android:ellipsize="end" />
 
-                <!-- Título de Episodios -->
+                <!-- Toggle "Ver más" para sinopsis (mobile) -->
                 <TextView
-                    android:id="@+id/tv_episodes_title"
+                    android:id="@+id/tv_synopsis_toggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="28dp"
+                    android:text="Ver más ▼"
+                    android:textColor="@color/accentRed"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:padding="4dp" />
+
+                <!-- Géneros (opcional) -->
+                <LinearLayout
+                    android:id="@+id/ll_genres"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="16dp"
-                    android:text="Episodios"
-                    android:textColor="@color/textPrimary"
-                    android:textSize="20sp"
-                    android:textStyle="bold"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="24dp"
+                    android:visibility="gone" />
+
+                <!-- Header de Episodios/Temporadas (mobile) -->
+                <LinearLayout
+                    android:id="@+id/ll_season_header"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="12dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Episodios"
+                        android:textColor="@color/textPrimary"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tv_season_selector"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Temporada 1"
+                        android:textColor="@color/textSecondary"
+                        android:textSize="14sp"
+                        android:background="@drawable/bg_season_selector"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp"
+                        android:clickable="true"
+                        android:focusable="true" />
+
+                </LinearLayout>
+
+                <!-- Panel de episodios (TV) -->
+                <View
+                    android:id="@+id/panel_episodes"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
                     android:visibility="gone" />
 
                 <!-- RecyclerView de Episodios -->

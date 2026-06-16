@@ -263,7 +263,7 @@ public class FootballLibreScraper {
         try {
             if (jwPlayerLiveSource) {
                 String livePlayable = resolveJwPlayerLiveUrl(embedUrl, stream.getEventsUrl());
-                if (livePlayable != null) {
+                if (livePlayable != null && isNativePlayableFootballUrl(livePlayable)) {
                     stream.setPlayableUrl(livePlayable);
                     Log.d(TAG, "Stream JW live resuelto: " + livePlayable);
                     return livePlayable;
@@ -517,23 +517,38 @@ public class FootballLibreScraper {
     private String extractPlayableUrl(String html, String sourceUrl) {
         // 1. DASH (.mpd) — máxima prioridad por calidad
         Matcher mMpd = PATTERN_MPD.matcher(html);
-        if (mMpd.find()) return cleanUrl(mMpd.group());
+        while (mMpd.find()) {
+            String candidate = cleanNativePlayableUrl(mMpd.group());
+            if (candidate != null) return candidate;
+        }
 
         // 2. HLS (.m3u8)
         Matcher mM3u8 = PATTERN_M3U8.matcher(html);
-        if (mM3u8.find()) return cleanUrl(mM3u8.group());
+        while (mM3u8.find()) {
+            String candidate = cleanNativePlayableUrl(mM3u8.group());
+            if (candidate != null) return candidate;
+        }
 
         // 3. src/file en JS (JWPlayer, VideoJS, Bitmovin, etc.)
         Matcher mSrc = PATTERN_SRC.matcher(html);
-        if (mSrc.find()) return cleanUrl(mSrc.group(1));
+        while (mSrc.find()) {
+            String candidate = cleanNativePlayableUrl(mSrc.group(1));
+            if (candidate != null) return candidate;
+        }
 
         // 4. <source src="...">
         Matcher mHtml = PATTERN_HTML_SRC.matcher(html);
-        if (mHtml.find()) return cleanUrl(mHtml.group(1));
+        while (mHtml.find()) {
+            String candidate = cleanNativePlayableUrl(mHtml.group(1));
+            if (candidate != null) return candidate;
+        }
 
         // 5. MP4 directo
         Matcher mMp4 = PATTERN_MP4.matcher(html);
-        if (mMp4.find()) return cleanUrl(mMp4.group());
+        while (mMp4.find()) {
+            String candidate = cleanNativePlayableUrl(mMp4.group());
+            if (candidate != null) return candidate;
+        }
 
         Log.d(TAG, "No se encontró URL reproducible en: " + sourceUrl);
         return null;
@@ -542,6 +557,26 @@ public class FootballLibreScraper {
     /**
      * Limpia una URL extraída: quita escapes, comillas, etc.
      */
+    private String cleanNativePlayableUrl(String url) {
+        String cleaned = cleanUrl(url);
+        return isNativePlayableFootballUrl(cleaned) ? cleaned : null;
+    }
+
+    private boolean isNativePlayableFootballUrl(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return false;
+        }
+        String lc = url.toLowerCase(Locale.ROOT);
+        if (lc.contains("/dash/enc/")
+                || lc.contains("/cenc")
+                || lc.contains("cenc_")
+                || lc.contains("cenc.mpd")) {
+            Log.d(TAG, "Stream DASH CENC requiere reproductor WebView: " + url);
+            return false;
+        }
+        return true;
+    }
+
     private String cleanUrl(String url) {
         if (url == null) return null;
         return url.replace("\\/", "/")

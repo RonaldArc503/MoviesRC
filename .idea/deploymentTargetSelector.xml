@@ -4,7 +4,7 @@
     <selectionStates>
       <SelectionState runConfigName="app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-05-31T06:21:48.780968200Z">
+        <DropdownSelection timestamp="2026-06-06T22:13:31.121483100Z">
           <Target type="DEFAULT_BOOT">
             <handle>
               <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\HP VICTUS\.android\avd\Television_720p.avd" />

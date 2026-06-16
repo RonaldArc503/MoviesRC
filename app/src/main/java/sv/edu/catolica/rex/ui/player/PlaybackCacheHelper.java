@@ -126,9 +126,14 @@ public final class PlaybackCacheHelper {
             return headers;
         }
         String lc = url.trim().toLowerCase(Locale.ROOT);
+
+        // ── AllCalidad / Pelispedia ───────────────────────────────────────────
         if (lc.contains("vimeos.net") || lc.contains("s12.vimeos.net")) {
             headers.put("Referer", "https://allcalidad.re/");
             headers.put("Origin",  "https://allcalidad.re");
+            headers.put("Accept",  "*/*");
+
+        // ── Fútbol libre y dominios relacionados ───────────────────────────────
         } else if (lc.contains("futbol-libre")
                 || lc.contains("esvideofy")
                 || lc.contains("telerium")
@@ -136,9 +141,17 @@ public final class PlaybackCacheHelper {
                 || lc.contains("topembed")) {
             headers.put("Referer", "https://futbol-libre.su/");
             headers.put("Origin",  "https://futbol-libre.su");
+            headers.put("Accept",  "*/*");
+            // Algunos servidores requieren conexión keep-alive
+            headers.put("Connection", "keep-alive");
+
+        // ── JWPlayer ──────────────────────────────────────────────────────────
         } else if (lc.contains("cdn.jwplayer.com") || lc.contains("jwpsrv.com")) {
             headers.put("Referer", "https://cdn.jwplayer.com/");
             headers.put("Origin",  "https://cdn.jwplayer.com");
+            headers.put("Accept",  "*/*");
+
+        // ── Otros providers de contenido ───────────────────────────────────────
         } else if (lc.contains("minochinos.com")
                 || lc.contains("hglink.to")
                 || lc.contains("bysedikamoum.com")
@@ -146,7 +159,28 @@ public final class PlaybackCacheHelper {
                 || lc.contains("voe.network")) {
             headers.put("Referer", "https://allcalidad.re/");
             headers.put("Origin",  "https://allcalidad.re");
+            headers.put("Accept",  "*/*");
+
+        // ── Streams genéricos HLS/DASH (probar con referer del propio dominio) ─
+        } else {
+            // Para URLs que terminan en .m3u8, .mpd o .mp4 sin dominio conocido,
+            // intentar extraer un referer desde la propia URL (el origen del servidor)
+            try {
+                if (lc.endsWith(".m3u8") || lc.endsWith(".mpd") || lc.endsWith(".mp4")) {
+                    Uri uri = Uri.parse(url);
+                    String host = uri.getHost();
+                    if (host != null) {
+                        String origin = uri.getScheme() + "://" + host;
+                        headers.put("Referer", origin + "/");
+                        headers.put("Origin", origin);
+                        headers.put("Accept", "*/*");
+                    }
+                }
+            } catch (Exception ignored) {
+                // Si falla el parseo, no agregar headers extra
+            }
         }
+
         return headers;
     }
 

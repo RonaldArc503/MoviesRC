@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Selector para botones con estados de enfoque y presionado
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Estado presionado -->
+    <item android:state_pressed="true">
+        <shape>
+            <solid android:color="#C42830" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <!-- Estado enfocado (TV) -->
+    <item android:state_focused="true">
+        <shape>
+            <solid android:color="#FF4A54" />
+            <corners android:radius="8dp" />
+            <stroke android:width="2dp" android:color="@color/white" />
+        </shape>
+    </item>
+    <!-- Estado normal -->
+    <item>
+        <shape>
+            <solid android:color="@color/accentRed" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+</selector>

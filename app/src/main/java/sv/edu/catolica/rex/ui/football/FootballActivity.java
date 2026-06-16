@@ -91,10 +91,13 @@ public class FootballActivity extends AppCompatActivity {
 
         viewModel.getErrorMessage().observe(this, message -> {
             if (message != null && !message.trim().isEmpty()) {
-                Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+                // Si estamos esperando la resolución de un stream y falló,
+                // ir directamente al WebView visible como fallback definitivo
                 if (awaitingPlaybackFallback && pendingPlaybackStream != null) {
                     awaitingPlaybackFallback = false;
                     launchWebFallback();
+                } else {
+                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
                 }
             }
         });
@@ -108,7 +111,16 @@ public class FootballActivity extends AppCompatActivity {
                     : pendingPlaybackTitle;
             ArrayList<String> urls = new ArrayList<>();
             urls.add(url.trim());
-            PlayerExoActivity.start(this, urls, title, true);
+            PlayerExoActivity.start(
+                    this,
+                    urls,
+                    title,
+                    true,
+                    pendingPlaybackStream.getEventsUrl(),
+                    null,
+                    pendingPlaybackStream.getEmbedUrl(),
+                    pendingPlaybackStream.getEventsUrl()
+            );
             awaitingPlaybackFallback = false;
             clearPendingPlayback();
             viewModel.clearResolvedUrl();
@@ -152,17 +164,30 @@ public class FootballActivity extends AppCompatActivity {
             Toast.makeText(this, "Stream no disponible", Toast.LENGTH_SHORT).show();
             return;
         }
+
+        // 1. Si es canal conocido (Canal 2 o Canal 4), usar URLs directas en ExoPlayer
         ArrayList<String> directChannelStreams = getDirectChannelStreams(stream);
         if (directChannelStreams != null) {
             awaitingPlaybackFallback = false;
-            PlayerExoActivity.start(this, directChannelStreams, pendingPlaybackTitle, true);
+            PlayerExoActivity.start(
+                    this,
+                    directChannelStreams,
+                    pendingPlaybackTitle,
+                    true,
+                    null,
+                    null,
+                    stream.getEmbedUrl(),
+                    stream.getEventsUrl()
+            );
             clearPendingPlayback();
             return;
         }
 
+        // 2. Intentar resolver rápido por HTTP (sin WebView headless).
+        //    Si el HTTP falla, el error se captura en getErrorMessage() y lanza WebView visible.
         awaitingPlaybackFallback = true;
         pendingPlaybackStream = stream;
-        viewModel.resolveStreamWithFallback(this, stream);
+        viewModel.resolveStream(stream);
     }
 
     private void launchWebFallback() {

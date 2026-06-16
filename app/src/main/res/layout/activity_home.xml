@@ -6,50 +6,70 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_app_dark">
 
-    <com.google.android.material.appbar.AppBarLayout
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@android:color/transparent"
-        android:paddingTop="8dp"
-        android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
-        app:elevation="0dp">
+        android:elevation="4dp">
 
-        <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
+        <View
             android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="@drawable/bg_toolbar_scrim"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            app:title="REX"
-            app:titleTextColor="@color/textPrimary"
-            app:titleTextAppearance="@style/TextAppearance.Material3.TitleLarge" />
+            android:layout_height="200dp"
+            android:background="@drawable/gradient_hero_fade" />
 
-        <androidx.appcompat.widget.SearchView
-            android:id="@+id/search_view"
+        <com.google.android.material.appbar.AppBarLayout
+            android:id="@+id/app_bar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_marginTop="8dp"
-            android:layout_marginEnd="16dp"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/bg_search_dark"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            app:iconifiedByDefault="false"
-            app:queryBackground="@android:color/transparent"
-            app:queryHint="Buscar películas, series..." />
+            android:background="@android:color/transparent"
+            android:paddingTop="8dp"
+            android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
+            app:elevation="0dp">
 
-    </com.google.android.material.appbar.AppBarLayout>
+            <androidx.appcompat.widget.Toolbar
+                android:id="@+id/toolbar"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize"
+                android:background="@android:color/transparent"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                app:title="REX"
+                app:titleTextAppearance="@style/TextAppearance.Material3.TitleLarge"
+                app:titleTextColor="@color/textPrimary" />
+
+            <androidx.appcompat.widget.SearchView
+                android:id="@+id/search_view"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginEnd="16dp"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/bg_search_dark"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                app:iconifiedByDefault="false"
+                app:queryBackground="@android:color/transparent"
+                app:queryHint="Buscar películas, series..." />
+
+        </com.google.android.material.appbar.AppBarLayout>
+
+    </FrameLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_home_sections"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:clipToPadding="false"
-        android:paddingTop="6dp"
-        android:paddingBottom="96dp"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+        android:overScrollMode="never"
+        android:paddingBottom="96dp" />
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:indeterminateTint="@color/accentRed"
+        android:visibility="gone" />
 
     <LinearLayout
         android:id="@+id/bottom_menu"
@@ -60,7 +80,7 @@
         android:layout_marginEnd="10dp"
         android:layout_marginBottom="8dp"
         android:background="@drawable/bg_toolbar_scrim"
-        android:elevation="8dp"
+        android:elevation="12dp"
         android:gravity="center"
         android:orientation="horizontal"
         android:paddingStart="6dp"
@@ -120,23 +140,23 @@
                 android:tint="#8A8F9E" />
         </LinearLayout>
 
-            <LinearLayout
-                android:id="@+id/menu_football"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:background="@drawable/bg_tv_menu_item"
-                android:clickable="true"
-                android:focusable="false"
-                android:gravity="center"
-                android:orientation="vertical">
+        <LinearLayout
+            android:id="@+id/menu_football"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/bg_tv_menu_item"
+            android:clickable="true"
+            android:focusable="false"
+            android:gravity="center"
+            android:orientation="vertical">
 
-                <ImageView
+            <ImageView
                 android:layout_width="20dp"
                 android:layout_height="20dp"
                 android:src="@drawable/ic_sports"
                 android:tint="#8A8F9E" />
-            </LinearLayout>
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/menu_categorias"
@@ -188,7 +208,7 @@
             <ImageView
                 android:layout_width="20dp"
                 android:layout_height="20dp"
-                android:src="@drawable/ic_star"
+                android:src="@drawable/ic_tv"
                 android:tint="#8A8F9E" />
         </LinearLayout>
 
@@ -211,13 +231,5 @@
         </LinearLayout>
 
     </LinearLayout>
-
-    <ProgressBar
-        android:id="@+id/progressBar"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:indeterminateTint="@color/accentRed"
-        android:visibility="gone" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

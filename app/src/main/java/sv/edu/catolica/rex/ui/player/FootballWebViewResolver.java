@@ -10,6 +10,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.io.ByteArrayInputStream;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 import sv.edu.catolica.rex.models.FootballMatch;
@@ -92,9 +94,13 @@ public class FootballWebViewResolver {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 // Interceptar .m3u8 / .mpd si el embed redirige directamente
-                if (PATTERN_STREAM.matcher(url).matches()) {
+                if (isNativePlayableStream(url)) {
                     notifyResolved(url, listener);
                     return true; // no cargar en WebView
+                }
+                if (isUnsupportedDirectStream(url)) {
+                    notifyFailedForWebViewPlayback(listener);
+                    return true;
                 }
                 return false;
             }
@@ -102,8 +108,16 @@ public class FootballWebViewResolver {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl() == null ? "" : request.getUrl().toString();
-                if (PATTERN_STREAM.matcher(url).matches()) {
+                if (isNativePlayableStream(url)) {
                     mainHandler.post(() -> notifyResolved(url, listener));
+                }
+                if (isUnsupportedDirectStream(url)) {
+                    mainHandler.post(() -> notifyFailedForWebViewPlayback(listener));
+                    return new WebResourceResponse(
+                            "text/plain",
+                            "UTF-8",
+                            new ByteArrayInputStream(new byte[0])
+                    );
                 }
                 return super.shouldInterceptRequest(view, request);
             }
@@ -212,11 +226,22 @@ public class FootballWebViewResolver {
     }
 
     private void notifyResolved(String url, OnStreamResolvedListener listener) {
+        if (!isNativePlayableStream(url)) {
+            return;
+        }
         if (resolved) return;
         resolved = true;
         if (timeoutRunnable != null) mainHandler.removeCallbacks(timeoutRunnable);
         Log.d(TAG, "Stream resuelto via WebView: " + url);
         mainHandler.post(() -> listener.onResolved(url));
+        destroy();
+    }
+
+    private void notifyFailedForWebViewPlayback(OnStreamResolvedListener listener) {
+        if (resolved) return;
+        resolved = true;
+        if (timeoutRunnable != null) mainHandler.removeCallbacks(timeoutRunnable);
+        listener.onFailed("Este stream requiere el reproductor web");
         destroy();
     }
 
@@ -241,7 +266,9 @@ public class FootballWebViewResolver {
         @JavascriptInterface
         public void onStreamFound(String url) {
             Log.d(TAG, "JsBridge.onStreamFound: " + url);
-            notifyResolved(url, listener);
+            if (isNativePlayableStream(url)) {
+                notifyResolved(url, listener);
+            }
         }
 
         @JavascriptInterface
@@ -250,5 +277,23 @@ public class FootballWebViewResolver {
             // No fallar todavía — el player puede cargar el stream después
             // El timeout se encargará si nada llega
         }
+    }
+
+    private boolean isNativePlayableStream(String url) {
+        if (url == null || !PATTERN_STREAM.matcher(url).matches()) {
+            return false;
+        }
+        return !isUnsupportedDirectStream(url);
+    }
+
+    private boolean isUnsupportedDirectStream(String url) {
+        if (url == null || !PATTERN_STREAM.matcher(url).matches()) {
+            return false;
+        }
+        String lc = url.toLowerCase(Locale.ROOT);
+        return lc.contains("/dash/enc/")
+                || lc.contains("/cenc")
+                || lc.contains("cenc_")
+                || lc.contains("cenc.mpd");
     }
 }

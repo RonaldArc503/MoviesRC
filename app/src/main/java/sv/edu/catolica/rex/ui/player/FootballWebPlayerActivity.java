@@ -26,15 +26,21 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import android.util.Log;
+
 import java.io.ByteArrayInputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
 
 public class FootballWebPlayerActivity extends AppCompatActivity {
 
+    private static final String TAG = "FootballWebPlayer";
+
     private static final String EXTRA_EMBED_URL = "football_embed_url";
     private static final String EXTRA_REFERER = "football_referer";
     private static final String EXTRA_TITLE = "football_title";
+    private static final String EXTRA_ALLOW_DIRECT_ROUTE = "football_allow_direct_route";
     private static final String USER_AGENT =
             "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
@@ -46,12 +52,23 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
     private WebChromeClient.CustomViewCallback customViewCallback;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private int autoStartGeneration = 0;
+    private boolean routedToNativePlayer = false;
+    private boolean allowDirectMediaRoute = true;
 
     public static void start(Context context, String embedUrl, String referer, String title) {
+        start(context, embedUrl, referer, title, true);
+    }
+
+    public static void start(Context context,
+                             String embedUrl,
+                             String referer,
+                             String title,
+                             boolean allowDirectMediaRoute) {
         Intent intent = new Intent(context, FootballWebPlayerActivity.class);
         intent.putExtra(EXTRA_EMBED_URL, embedUrl);
         intent.putExtra(EXTRA_REFERER, referer);
         intent.putExtra(EXTRA_TITLE, title);
+        intent.putExtra(EXTRA_ALLOW_DIRECT_ROUTE, allowDirectMediaRoute);
         context.startActivity(intent);
     }
 
@@ -70,6 +87,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
 
         String title = getIntent().getStringExtra(EXTRA_TITLE);
         setTitle(title == null || title.trim().isEmpty() ? "Futbol en vivo" : title);
+        allowDirectMediaRoute = getIntent().getBooleanExtra(EXTRA_ALLOW_DIRECT_ROUTE, true);
 
         setupLayout();
         setupWebView();
@@ -114,10 +132,24 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         settings.setUserAgentString(USER_AGENT);
 
+        // Inyectar bridge de diagnóstico ANTES de cargar cualquier página
+        // para que el JS pueda llamarlo desde el primer momento
+        Log.d(TAG, "Registrando RexDiagnosticBridge en setupWebView");
+        webView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void onVideoInfo(String json) {
+                Log.d(TAG, "JS diagnostic: " + json);
+            }
+        }, "RexDiagnosticBridge");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                if (allowDirectMediaRoute && isDirectMediaUrl(url)) {
+                    routeDirectMediaToExo(url);
+                    return true;
+                }
                 if (isBlockedNavigation(url)) {
                     return true;
                 }
@@ -127,6 +159,14 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                if (allowDirectMediaRoute && isDirectMediaUrl(url)) {
+                    mainHandler.post(() -> routeDirectMediaToExo(url));
+                    return new WebResourceResponse(
+                            "text/plain",
+                            "UTF-8",
+                            new ByteArrayInputStream(new byte[0])
+                    );
+                }
                 if (isBlockedNavigation(url)) {
                     return new WebResourceResponse(
                             "text/plain",
@@ -198,51 +238,86 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
     }
 
     private void autoStartVideo(WebView view) {
+        Log.d(TAG, "autoStartVideo: injectando JS de reproducción");
         String js =
                 "(function(){" +
+                // 1. Bloquear window.open para evitar redirecciones no deseadas
                 "try{window.open=function(u){try{location.href=u;}catch(e){}return null;};}catch(e){}" +
-                "var media=null;try{media=document.querySelector('video')||document.querySelector('audio');}catch(e){}" +
+                // 2. Marcar si ya se inició reproducción para no repetir
                 "var started=false;try{started=!!window.__rexFootballPlaybackStarted;}catch(e){}" +
-                "if(media){" +
-                "  try{media.addEventListener('playing',function(){window.__rexFootballPlaybackStarted=true;},{once:true});}catch(e){}" +
-                "  try{if(!media.paused||media.currentTime>0.25){window.__rexFootballPlaybackStarted=true;return;}}catch(e){}" +
-                "  if(started){try{var rp=media.play();if(rp&&rp.catch)rp.catch(function(){});}catch(e){}return;}" +
-                "}" +
-                "if(!document.getElementById('rex-fullscreen-style')){" +
+                // 3. Ajustar viewport para que el contenido ocupe toda la pantalla
                 "var meta=document.querySelector('meta[name=viewport]')||document.createElement('meta');" +
                 "meta.name='viewport';meta.content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no';document.head.appendChild(meta);" +
-                "var css='html,body{width:100%!important;height:100%!important;margin:0!important;padding:0!important;background:#000!important;overflow:hidden!important;}'+" +
-                "'body>*:not(script):not(style){max-width:none!important;}'+" +
-                "'#player,#myElement,.jwplayer,.jw-wrapper,.jw-aspect,.jw-media,.jw-preview,.jw-display,.jw-controls,.jw-overlays,.jwplayer.jw-flag-fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;margin:0!important;padding:0!important;background:#000!important;}'+" +
-                "'.jw-flag-aspect-mode,.jw-flag-aspect-mode .jw-aspect{height:100vh!important;padding:0!important;}'+" +
-                "'video,.jw-video,iframe{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:100%!important;max-height:100%!important;object-fit:contain!important;background:#000!important;}'+" +
-                "'.jwplayer{z-index:2147483647!important;}';" +
-                "var s=document.createElement('style');s.id='rex-fullscreen-style';s.innerHTML=css;document.head.appendChild(s);" +
+                // 4. CSS mínimo: solo fondo negro y overflow oculto. NO forzar estilos en players específicos.
+                "if(!document.getElementById('rex-minimal-style')){" +
+                "var s=document.createElement('style');s.id='rex-minimal-style';" +
+                "s.innerHTML='html,body{width:100%!important;height:100%!important;margin:0!important;padding:0!important;background:#000!important;overflow:hidden!important;}';" +
+                "document.head.appendChild(s);" +
                 "}" +
-                "function fire(el){if(!el)return false;try{['pointerdown','mousedown','mouseup','click','touchstart','touchend'].forEach(function(t){el.dispatchEvent(new Event(t,{bubbles:true,cancelable:true}));});el.click();return true;}catch(e){try{el.click();return true;}catch(e2){}}return false;}" +
-                "function press(sel){var els=document.querySelectorAll(sel);for(var i=0;i<els.length;i++){if(fire(els[i]))return true;}return false;}" +
-                "function pressByText(){var words=['play','reproducir','ver','watch'];var els=document.querySelectorAll('button,a,[role=button]');for(var i=0;i<els.length;i++){var t=(els[i].innerText||els[i].textContent||'').toLowerCase();for(var j=0;j<words.length;j++){if(t.indexOf(words[j])!==-1){if(fire(els[i]))return true;}}}return false;}" +
-                "function getJw(){try{if(typeof jwplayer!=='function')return null;var nodes=document.querySelectorAll('[id^=botr_],.jwplayer,[id*=jwplayer]');for(var i=0;i<nodes.length;i++){try{var id=nodes[i].id;if(id){var p=jwplayer(id);if(p)return p;}}catch(e){}}try{return jwplayer();}catch(e){return null;}}catch(e){return null;}}" +
-                "try{document.querySelectorAll('.close,[aria-label*=close],[class*=close],[id*=close]').forEach(function(e){if((e.innerText||'').length<40){fire(e);}});}catch(e){}" +
-                "try{" +
-                "var p=getJw();if(p){" +
-                "var state='';try{state=p.getState?p.getState():'';}catch(e){}" +
-                "if(state==='playing'){window.__rexFootballPlaybackStarted=true;return;}" +
-                "try{p.resize('100%','100%');}catch(e){}" +
-                "try{p.setMute(false);}catch(e){}" +
-                "try{p.setVolume(100);}catch(e){}" +
-                "try{p.play();}catch(e){}" +
-                "}" +
-                "}catch(e){}" +
-                "var v=document.querySelector('video');" +
-                "if(v){try{v.autoplay=true;v.preload='auto';v.removeAttribute('playsinline');v.setAttribute('webkit-playsinline','false');v.muted=false;v.volume=1;v.controls=true;var r=v.play();if(r&&r.catch){r.catch(function(){});}}catch(e){}}" +
-                "try{document.querySelectorAll('iframe').forEach(function(f){try{f.contentWindow.postMessage('play','*');}catch(e){}});}catch(e){}" +
-                "if(!window.__rexFootballClickedOnce){" +
-                "  window.__rexFootballClickedOnce=true;" +
-                "  press('.jw-icon-playback,.jw-display-icon-container,.jw-display-controls,.jwplayer .jw-icon,.jwplayer button,button,[role=button],.bmpui-ui-playbacktogglebutton,.vjs-big-play-button,.plyr__control,.play-button,.play,.btn-play');" +
-                "  pressByText();" +
-                "}" +
+                // 5. Esperar a que el DOM tenga un elemento video real
+                "function tryPlay(){ " +
+                "  var v=document.querySelector('video'); " +
+                "  if(!v){ " +
+                "    if(!window.__rexVideoRetries) window.__rexVideoRetries=0; " +
+                "    if(window.__rexVideoRetries<3){ " +
+                "      window.__rexVideoRetries++; " +
+                "      setTimeout(tryPlay,500); " +
+                "    } " +
+                "    return; " +
+                "  } " +
+                "  try{ if(!v.paused && v.currentTime>0.25){ window.__rexFootballPlaybackStarted=true; return; } }catch(e){} " +
+                "  var hasVideoTrack=true; " +
+                "  try{ hasVideoTrack = v.videoWidth>0 || (v.readyState>=1 && (v.videoWidth>0 || v.getVideoPlaybackQuality)); }catch(e){} " +
+                "  window.__rexVideoHasDimensions=hasVideoTrack; " +
+                "  try{ " +
+                "    v.autoplay=true; " +
+                "    v.preload='auto'; " +
+                "    v.setAttribute('playsinline',''); " +
+                "    v.setAttribute('webkit-playsinline',''); " +
+                "    v.muted=false; " +
+                "    v.volume=1; " +
+                "    v.controls=true; " +
+                "    var r=v.play(); " +
+                "    if(r&&r.catch) r.catch(function(){}); " +
+                "  }catch(e){} " +
+                "  if(!window.__rexFootballClickedOnce){ " +
+                "    window.__rexFootballClickedOnce=true; " +
+                "    ['button.play,.jw-icon-playback,.jw-display-icon-container,.vjs-big-play-button,.plyr__control,.play-button'].forEach(function(sel){ " +
+                "      var el=document.querySelector(sel); " +
+                "      if(el){ try{ el.click(); }catch(e){} } " +
+                "    }); " +
+                "  } " +
+                "} " +
+                "try{ " +
+                "  if(typeof jwplayer==='function'){ " +
+                "    var p=null; " +
+                "    var nodes=document.querySelectorAll('[id^=botr_],.jwplayer,[id*=jwplayer]'); " +
+                "    for(var n=0;n<nodes.length&&!p;n++){ try{ if(nodes[n].id) p=jwplayer(nodes[n].id); }catch(e){} } " +
+                "    if(!p) try{ p=jwplayer(); }catch(e){} " +
+                "    if(p){ " +
+                "      try{ p.setMute(false); }catch(e){} " +
+                "      try{ p.setVolume(100); }catch(e){} " +
+                "      try{ p.play(); }catch(e){} " +
+                "    } " +
+                "  } " +
+                "}catch(e){} " +
+                "tryPlay(); " +
+                "try{ " +
+                "  document.addEventListener('playing',function(e){ " +
+                "    if(e.target&&(e.target.tagName==='VIDEO'||e.target.tagName==='AUDIO')){ " +
+                "      window.__rexFootballPlaybackStarted=true; " +
+                "    } " +
+                "  },{once:true,capture:true}); " +
+                "}catch(e){} " +
+                // 9. Reportar diagnóstico de vuelta a Java
+                "setTimeout(function(){ " +
+                "  var v=document.querySelector('video'); " +
+                "  var info={found:!!v,playing:false,hasVideoTrack:false,width:0,height:0,started:!!window.__rexFootballPlaybackStarted}; " +
+                "  if(v){ try{ info.playing=!v.paused; }catch(e){} try{ info.hasVideoTrack=v.videoWidth>0; }catch(e){} try{ info.width=v.videoWidth; info.height=v.videoHeight; }catch(e){} } " +
+                "  window.RexDiagnosticBridge.onVideoInfo(JSON.stringify(info)); " +
+                "},2000); " +
                 "})();";
+
         view.evaluateJavascript(js, null);
     }
 
@@ -271,6 +346,56 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
                 || lc.contains("google-analytics")
                 || lc.contains("popads")
                 || lc.contains("adsterra");
+    }
+
+    private boolean isDirectMediaUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        String lc = url.toLowerCase(Locale.ROOT);
+        int queryIndex = lc.indexOf('?');
+        String path = queryIndex >= 0 ? lc.substring(0, queryIndex) : lc;
+
+        // Streams con DRM (CENC/Widevine) no funcionan en ExoPlayer sin licencia ->
+        // deben reproducirse en el WebView con JWPlayer que maneja la autenticación
+        if (lc.contains("/dash/enc/")
+                || lc.contains("/cenc")
+                || lc.contains("cenc_")
+                || lc.contains("cenc.mpd")) {
+            Log.d(TAG, "Stream con DRM/CENC, manteniendo en WebView: " + url);
+            return false;
+        }
+
+        // broadpeak.io requiere tokens de autenticación que solo JWPlayer maneja correctamente
+        if (lc.contains("broadpeak.io") || lc.contains("broadpeak")) {
+            Log.d(TAG, "Stream de broadpeak.io (requiere auth JWPlayer), manteniendo en WebView: " + url);
+            return false;
+        }
+
+        return path.endsWith(".m3u8") || path.endsWith(".mpd") || path.endsWith(".mp4");
+    }
+
+    private void routeDirectMediaToExo(String url) {
+        if (routedToNativePlayer || url == null || url.trim().isEmpty()) {
+            return;
+        }
+        Log.d(TAG, "Redirigiendo stream directo a ExoPlayer: " + url);
+        routedToNativePlayer = true;
+        ArrayList<String> urls = new ArrayList<>();
+        urls.add(url.trim());
+        String referer = getIntent().getStringExtra(EXTRA_REFERER);
+        String embedUrl = getIntent().getStringExtra(EXTRA_EMBED_URL);
+        PlayerExoActivity.start(
+                this,
+                urls,
+                getTitle() == null ? "Futbol en vivo" : getTitle().toString(),
+                true,
+                referer,
+                null,
+                embedUrl,
+                referer
+        );
+        finish();
     }
 
     private void hideCustomView() {
@@ -305,6 +430,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         super.onResume();
         enterImmersiveMode();
         if (webView != null) {
+            webView.resumeTimers();
             webView.onResume();
         }
     }
@@ -315,6 +441,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         if (webView != null) {
             stopFootballPlayback();
             webView.onPause();
+            webView.pauseTimers();
         }
         super.onPause();
     }
@@ -326,11 +453,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         hideCustomView();
         if (webView != null) {
             stopFootballPlayback();
-            webView.loadUrl("about:blank");
-            root.removeView(webView);
-            webView.stopLoading();
-            webView.destroy();
-            webView = null;
+            destroyWebView();
         }
         super.onDestroy();
     }
@@ -340,9 +463,38 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
             return;
         }
         webView.evaluateJavascript(
-                "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();m.src='';m.load();}catch(e){}});}catch(e){}try{if(window.jwplayer){var p=window.jwplayer();if(p&&p.stop)p.stop();}}catch(e){}})();",
+                "(function(){"
+                        + "try{document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();m.removeAttribute('src');m.src='';m.load();m.remove();}catch(e){}});}catch(e){}"
+                        + "try{if(window.jwplayer){var nodes=document.querySelectorAll('[id^=botr_],.jwplayer,[id*=jwplayer]');for(var i=0;i<nodes.length;i++){try{var id=nodes[i].id;if(id){var p=window.jwplayer(id);if(p){if(p.pause)p.pause(true);if(p.stop)p.stop();if(p.remove)p.remove();}}}catch(e){}}try{var p2=window.jwplayer();if(p2){if(p2.pause)p2.pause(true);if(p2.stop)p2.stop();if(p2.remove)p2.remove();}}catch(e){}}}catch(e){}"
+                        + "try{document.querySelectorAll('iframe').forEach(function(f){try{f.src='about:blank';f.remove();}catch(e){}});}catch(e){}"
+                        + "})();",
                 null
         );
+    }
+
+    private void destroyWebView() {
+        if (webView == null) {
+            return;
+        }
+        try {
+            webView.stopLoading();
+            webView.loadUrl("about:blank");
+            webView.loadDataWithBaseURL(null, "", "text/html", "UTF-8", null);
+            webView.setWebChromeClient(null);
+            webView.setWebViewClient(null);
+            webView.clearHistory();
+            webView.clearCache(false);
+            webView.onPause();
+            webView.pauseTimers();
+            if (root != null) {
+                root.removeView(webView);
+            }
+            webView.removeAllViews();
+            webView.destroy();
+        } catch (Exception ignored) {
+        } finally {
+            webView = null;
+        }
     }
 
     private void enterImmersiveMode() {
