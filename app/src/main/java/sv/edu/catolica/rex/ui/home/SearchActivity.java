@@ -1,6 +1,8 @@
 package sv.edu.catolica.rex.ui.home;
 
+import android.app.UiModeManager;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
@@ -24,12 +26,13 @@ import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
 import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
 
-public class TvSearchActivity extends AppCompatActivity {
+public class SearchActivity extends AppCompatActivity {
 
     private RecyclerView rvSections;
     private ProgressBar progressBar;
     private SearchView searchView;
     private HomeAdapter adapter;
+    private boolean isTv;
 
     private boolean suppressQueryListener = false;
     private String lastSearchQuery = "";
@@ -38,7 +41,13 @@ public class TvSearchActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_tv_search);
+        isTv = isTvDevice();
+
+        if (isTv) {
+            setContentView(R.layout.activity_tv_search);
+        } else {
+            setContentView(R.layout.activity_search);
+        }
 
         rvSections = findViewById(R.id.rv_home_sections);
         progressBar = findViewById(R.id.progressBar);
@@ -48,7 +57,7 @@ public class TvSearchActivity extends AppCompatActivity {
         rvSections.setHasFixedSize(true);
         rvSections.setItemAnimator(null);
         adapter = new HomeAdapter(this, new ArrayList<>(),
-                item -> DetalleActivity.start(TvSearchActivity.this, item), true);
+                item -> DetalleActivity.start(SearchActivity.this, item), isTv);
         rvSections.setAdapter(adapter);
 
         View backButton = findViewById(R.id.btn_back);
@@ -57,6 +66,11 @@ public class TvSearchActivity extends AppCompatActivity {
         }
 
         setupSearchBehavior();
+    }
+
+    private boolean isTvDevice() {
+        UiModeManager mgr = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
+        return mgr != null && mgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 
     private void setupSearchBehavior() {
@@ -91,17 +105,19 @@ public class TvSearchActivity extends AppCompatActivity {
             return false;
         });
 
-        searchView.setOnClickListener(v -> activateSearchInput());
-        searchView.setOnKeyListener((v, keyCode, event) -> {
-            if (event.getAction() != KeyEvent.ACTION_DOWN) {
+        if (isTv) {
+            searchView.setOnClickListener(v -> activateSearchInput());
+            searchView.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) {
+                    return false;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                    activateSearchInput();
+                    return true;
+                }
                 return false;
-            }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                activateSearchInput();
-                return true;
-            }
-            return false;
-        });
+            });
+        }
     }
 
     private void activateSearchInput() {
@@ -177,7 +193,7 @@ public class TvSearchActivity extends AppCompatActivity {
                     progressBar.setVisibility(ProgressBar.GONE);
                     if (merged.isEmpty()) {
                         showSections(new ArrayList<>());
-                        Toast.makeText(TvSearchActivity.this,
+                        Toast.makeText(SearchActivity.this,
                                 "Sin resultados para: " + safeQuery, Toast.LENGTH_SHORT).show();
                         return;
                     }
@@ -211,7 +227,7 @@ public class TvSearchActivity extends AppCompatActivity {
                         return;
                     }
                     progressBar.setVisibility(ProgressBar.GONE);
-                    Toast.makeText(TvSearchActivity.this,
+                    Toast.makeText(SearchActivity.this,
                             "Error en busqueda: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             }
@@ -283,7 +299,7 @@ public class TvSearchActivity extends AppCompatActivity {
     private void showSections(List<Section> sections) {
         if (adapter == null) {
             adapter = new HomeAdapter(this, sections,
-                    item -> DetalleActivity.start(TvSearchActivity.this, item), true);
+                    item -> DetalleActivity.start(SearchActivity.this, item), isTv);
             rvSections.setAdapter(adapter);
             return;
         }

@@ -1,59 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.coordinatorlayout.widget.CoordinatorLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_app_dark">
+    android:background="@drawable/bg_app_dark"
+    android:fitsSystemWindows="true">
 
-    <FrameLayout
+    <View
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:elevation="4dp">
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="200dp"
-            android:background="@drawable/gradient_hero_fade" />
-
-        <com.google.android.material.appbar.AppBarLayout
-            android:id="@+id/app_bar"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@android:color/transparent"
-            android:paddingTop="8dp"
-            android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
-            app:elevation="0dp">
-
-            <androidx.appcompat.widget.Toolbar
-                android:id="@+id/toolbar"
-                android:layout_width="match_parent"
-                android:layout_height="?attr/actionBarSize"
-                android:background="@android:color/transparent"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                app:title="REX"
-                app:titleTextAppearance="@style/TextAppearance.Material3.TitleLarge"
-                app:titleTextColor="@color/textPrimary" />
-
-            <androidx.appcompat.widget.SearchView
-                android:id="@+id/search_view"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="16dp"
-                android:layout_marginTop="8dp"
-                android:layout_marginEnd="16dp"
-                android:layout_marginBottom="12dp"
-                android:background="@drawable/bg_search_dark"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp"
-                app:iconifiedByDefault="false"
-                app:queryBackground="@android:color/transparent"
-                app:queryHint="Buscar películas, series..." />
-
-        </com.google.android.material.appbar.AppBarLayout>
-
-    </FrameLayout>
+        android:layout_height="160dp"
+        android:background="@drawable/gradient_hero_fade" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_home_sections"
@@ -61,7 +17,8 @@
         android:layout_height="match_parent"
         android:clipToPadding="false"
         android:overScrollMode="never"
-        android:paddingBottom="96dp" />
+        android:paddingTop="24dp"
+        android:paddingBottom="100dp" />
 
     <ProgressBar
         android:id="@+id/progressBar"
@@ -74,17 +31,17 @@
     <LinearLayout
         android:id="@+id/bottom_menu"
         android:layout_width="match_parent"
-        android:layout_height="64dp"
+        android:layout_height="72dp"
         android:layout_gravity="bottom"
-        android:layout_marginStart="10dp"
-        android:layout_marginEnd="10dp"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
         android:layout_marginBottom="8dp"
         android:background="@drawable/bg_toolbar_scrim"
         android:elevation="12dp"
         android:gravity="center"
         android:orientation="horizontal"
-        android:paddingStart="6dp"
-        android:paddingEnd="6dp">
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
 
         <LinearLayout
             android:id="@+id/menu_home"
@@ -98,10 +55,19 @@
             android:orientation="vertical">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_home"
-                android:tint="#FFFFFF" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Inicio"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -116,10 +82,19 @@
             android:orientation="vertical">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_search"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Buscar"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -134,10 +109,19 @@
             android:orientation="vertical">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_chanels"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Canales"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -152,10 +136,19 @@
             android:orientation="vertical">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_sports"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Deportes"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -170,10 +163,19 @@
             android:orientation="vertical">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_grid"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Categorías"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -185,13 +187,23 @@
             android:clickable="true"
             android:focusable="false"
             android:gravity="center"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:visibility="gone">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_series"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Series"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -203,13 +215,23 @@
             android:clickable="true"
             android:focusable="false"
             android:gravity="center"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:visibility="gone">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_tv"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Doramas"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
 
         <LinearLayout
@@ -221,15 +243,23 @@
             android:clickable="true"
             android:focusable="false"
             android:gravity="center"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:visibility="gone">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:src="@drawable/ic_settings"
-                android:tint="#8A8F9E" />
+                android:tint="@color/textMuted" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Ajustes"
+                android:textColor="@color/textMuted"
+                android:textSize="10sp"
+                android:maxLines="1" />
         </LinearLayout>
-
     </LinearLayout>
-
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

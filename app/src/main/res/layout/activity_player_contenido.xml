@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bgPrimary">
@@ -13,38 +13,42 @@
         android:id="@+id/progressBar"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_centerInParent="true"
+        android:layout_gravity="center"
         android:indeterminateTint="@color/accentRed" />
 
     <TextView
         android:id="@+id/tv_next_loader"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_below="@id/progressBar"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="14dp"
+        android:layout_gravity="center"
+        android:layout_marginTop="54dp"
         android:background="@android:color/transparent"
         android:text="Cargando siguiente episodio..."
         android:textColor="@color/white"
         android:textSize="14sp"
-        android:visibility="gone" />
+        android:visibility="gone"
+        android:translationY="14dp" />
 
     <Button
         android:id="@+id/btn_next_episode"
-        android:layout_width="wrap_content"
-        android:layout_height="48dp"
-        android:layout_alignParentBottom="true"
-        android:layout_alignParentEnd="true"
+        android:layout_width="260dp"
+        android:layout_height="64dp"
+        android:layout_gravity="bottom|end"
         android:layout_marginEnd="20dp"
-        android:layout_marginBottom="24dp"
+        android:layout_marginBottom="104dp"
         android:background="@drawable/bg_next_episode_button"
         android:elevation="10dp"
-        android:paddingStart="20dp"
-        android:paddingEnd="20dp"
+        android:gravity="center"
+        android:maxLines="2"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
         android:text="Siguiente episodio"
         android:textAllCaps="false"
         android:textColor="@color/white"
-        android:textSize="14sp"
+        android:textSize="15sp"
+        android:textStyle="bold"
         android:visibility="gone" />
 
-</RelativeLayout>
+    <include layout="@layout/player_control_overlay" />
+
+</FrameLayout>

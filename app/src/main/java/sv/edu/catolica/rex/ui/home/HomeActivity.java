@@ -7,6 +7,7 @@ import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
+import android.util.Log;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ProgressBar;
@@ -26,14 +27,20 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import sv.edu.catolica.rex.BuildConfig;
 import sv.edu.catolica.rex.R;
+import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.Section;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
 import sv.edu.catolica.rex.network.smart.PelispediaScraper;
+import sv.edu.catolica.rex.models.FavoriteItem;
+import sv.edu.catolica.rex.models.WatchedHistoryItem;
+import sv.edu.catolica.rex.repository.UserDataManager;
+import sv.edu.catolica.rex.storage.ContinueWatchingStore;
+import sv.edu.catolica.rex.ui.auth.AuthManager;
+import sv.edu.catolica.rex.ui.auth.LoginActivity;
 import sv.edu.catolica.rex.ui.football.FootballActivity;
 import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
-//import sv.edu.catolica.rex.ui.detalle.DetalleContenidoActivity;
 
 public class HomeActivity extends AppCompatActivity {
 
@@ -81,7 +88,6 @@ public class HomeActivity extends AppCompatActivity {
 
         rvSections  = findViewById(R.id.rv_home_sections);
         progressBar = findViewById(R.id.progressBar);
-        searchView  = findViewById(R.id.search_view);
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
         rvSections.setHasFixedSize(true);
@@ -103,26 +109,26 @@ public class HomeActivity extends AppCompatActivity {
             pendingTvFocusRestore = isTv;
         }
 
-        if (searchView != null) {
-            searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
-                @Override public boolean onQueryTextSubmit(String query) {
-                    performSearch(query); return true;
-                }
-                @Override public boolean onQueryTextChange(String newText) {
-                    if (suppressQueryListener) return false;
-                    String text = newText == null ? "" : newText.trim();
-                    if (text.isEmpty() && isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
-                    return false;
-                }
-            });
-
-            searchView.setOnCloseListener(() -> {
-                if (isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
-                return false;
-            });
-        }
-
         if (isTv) {
+            searchView = findViewById(R.id.search_view);
+            if (searchView != null) {
+                searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+                    @Override public boolean onQueryTextSubmit(String query) {
+                        performSearch(query); return true;
+                    }
+                    @Override public boolean onQueryTextChange(String newText) {
+                        if (suppressQueryListener) return false;
+                        String text = newText == null ? "" : newText.trim();
+                        if (text.isEmpty() && isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
+                        return false;
+                    }
+                });
+
+                searchView.setOnCloseListener(() -> {
+                    if (isSearchMode) { exitSearchModeAndRestoreHome(); return true; }
+                    return false;
+                });
+            }
             setupTvSearchBehavior();
             setupTvSideMenu();
         } else {
@@ -130,6 +136,20 @@ public class HomeActivity extends AppCompatActivity {
         }
 
         loadHomeData(false);
+
+        if (AuthManager.getInstance().isSignedIn()) {
+            UserDataManager.getInstance(this).restoreFromFirestore(new UserDataManager.RestoreCallback() {
+                @Override
+                public void onRestoreComplete(boolean fromFirestore) {
+                    runOnUiThread(() -> refreshUserDataSections());
+                }
+
+                @Override
+                public void onError(Exception e) {
+                    Log.w("HomeActivity", "restoreFromFirestore failed", e);
+                }
+            });
+        }
     }
 
     private boolean isTvDevice() {
@@ -176,10 +196,14 @@ public class HomeActivity extends AppCompatActivity {
         menuDoramas = findViewById(R.id.menu_doramas);
         menuAjustes = findViewById(R.id.menu_ajustes);
 
-        if (menuHome == null || menuBuscar == null || menuCanales == null || menuCategorias == null
-                || menuFootball == null || menuSeries == null || menuDoramas == null) {
+        if (menuHome == null || menuBuscar == null || menuCanales == null
+                || menuFootball == null || menuCategorias == null) {
             return;
         }
+
+        if (menuSeries != null) menuSeries.setVisibility(View.VISIBLE);
+        if (menuDoramas != null) menuDoramas.setVisibility(View.VISIBLE);
+        if (menuAjustes != null) menuAjustes.setVisibility(View.VISIBLE);
 
         menuHome.setOnClickListener(v -> {
             setTvMenuSelected(menuHome);
@@ -196,7 +220,7 @@ public class HomeActivity extends AppCompatActivity {
         });
 
         menuBuscar.setOnClickListener(v -> {
-            startActivity(new Intent(HomeActivity.this, TvSearchActivity.class));
+            startActivity(new Intent(HomeActivity.this, SearchActivity.class));
         });
 
         menuCanales.setOnClickListener(v -> {
@@ -222,14 +246,14 @@ public class HomeActivity extends AppCompatActivity {
         });
 
         if (menuAjustes != null) {
-            menuAjustes.setOnClickListener(v -> handleTvMenuPlaceholder(menuAjustes));
+            menuAjustes.setOnClickListener(v -> showSettingsDialog());
         }
 
         setTvMenuSelected(menuHome);
     }
 
     private void setTvMenuSelected(View selectedItem) {
-        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuFootball, menuCategorias, menuSeries, menuDoramas, menuAjustes};
+        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuFootball, menuCategorias};
         for (View item : items) {
             if (item == null) {
                 continue;
@@ -267,27 +291,39 @@ public class HomeActivity extends AppCompatActivity {
         Toast.makeText(this, "Proximamente", Toast.LENGTH_SHORT).show();
     }
 
+    private void showSettingsDialog() {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Ajustes")
+                .setItems(new String[]{"Usuario: " + (AuthManager.getInstance().getCurrentUser() != null
+                        ? AuthManager.getInstance().getCurrentUser().getEmail() : "No autenticado"),
+                        "Cerrar sesión"}, (dialog, which) -> {
+                    if (which == 1) {
+                        AuthManager.getInstance().logout();
+                        UserDataManager.getInstance(this).cleanup();
+                        Intent intent = new Intent(this, LoginActivity.class);
+                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                        startActivity(intent);
+                        finish();
+                    }
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
     private void setupPhoneBottomMenu() {
         menuHome = findViewById(R.id.menu_home);
         menuBuscar = findViewById(R.id.menu_buscar);
         menuCanales = findViewById(R.id.menu_canales);
         menuFootball = findViewById(R.id.menu_football);
         menuCategorias = findViewById(R.id.menu_categorias);
-        menuSeries = findViewById(R.id.menu_series);
-        menuDoramas = findViewById(R.id.menu_doramas);
-        menuAjustes = findViewById(R.id.menu_ajustes);
 
-        if (menuHome == null || menuBuscar == null || menuCanales == null || menuCategorias == null
-                || menuFootball == null || menuSeries == null || menuDoramas == null) {
+        if (menuHome == null || menuBuscar == null || menuCanales == null
+                || menuFootball == null || menuCategorias == null) {
             return;
         }
 
         menuHome.setOnClickListener(v -> {
             setTvMenuSelected(menuHome);
-            if (isSearchMode) {
-                exitSearchModeAndRestoreHome();
-                return;
-            }
             if (!homeSectionsSnapshot.isEmpty()) {
                 showSections(copySections(homeSectionsSnapshot));
             } else {
@@ -296,8 +332,7 @@ public class HomeActivity extends AppCompatActivity {
         });
 
         menuBuscar.setOnClickListener(v -> {
-            setTvMenuSelected(menuBuscar);
-            activateTvSearchInput();
+            startActivity(new Intent(HomeActivity.this, SearchActivity.class));
         });
 
         menuCanales.setOnClickListener(v -> {
@@ -316,22 +351,6 @@ public class HomeActivity extends AppCompatActivity {
             showSections(buildCategorySections(copySections(source)));
         });
 
-        menuSeries.setOnClickListener(v -> {
-            setTvMenuSelected(menuSeries);
-            List<Section> source = homeSectionsSnapshot.isEmpty() ? getCachedHomeSectionsIfFresh() : homeSectionsSnapshot;
-            showSections(filterSectionsByType(copySections(source), true));
-        });
-
-        menuDoramas.setOnClickListener(v -> {
-            setTvMenuSelected(menuDoramas);
-            List<Section> source = homeSectionsSnapshot.isEmpty() ? getCachedHomeSectionsIfFresh() : homeSectionsSnapshot;
-            showSections(filterSectionsDoramas(copySections(source)));
-        });
-
-        if (menuAjustes != null) {
-            menuAjustes.setOnClickListener(v -> handleTvMenuPlaceholder(menuAjustes));
-        }
-
         setTvMenuSelected(menuHome);
     }
 
@@ -341,6 +360,13 @@ public class HomeActivity extends AppCompatActivity {
         }
         captureHomeNavigationState();
         pendingTvFocusRestore = isTv;
+
+        UserDataManager udm = UserDataManager.getInstance(this);
+        if (udm.isRestoreComplete()) {
+            String postId = String.valueOf(item.getPostId());
+            udm.addToHistory(postId, item.getTitulo(), item.getImagen(), item.getMediaType());
+        }
+
         DetalleActivity.start(HomeActivity.this, item);
     }
 
@@ -365,8 +391,9 @@ public class HomeActivity extends AppCompatActivity {
             try {
                 // Lanzar peticiones EN PARALELO pero escalonadas ~120ms
                 // para no parecer un burst de bot al mismo host
-                ExecutorService pool = Executors.newFixedThreadPool(7);
+                ExecutorService pool = Executors.newFixedThreadPool(16);
 
+                // AllCalidad futures
                 Future<List<AllCalidadScraper.ContentItem>> featuredFuture =
                         pool.submit((Callable<List<AllCalidadScraper.ContentItem>>)
                                 AllCalidadScraper::getFeaturedMovies);
@@ -385,12 +412,34 @@ public class HomeActivity extends AppCompatActivity {
                         pool.submit((Callable<List<AllCalidadScraper.ContentItem>>)
                                 AllCalidadScraper::getPopularTvShows);
                 stagger();
+
+                // TMDB futures (nuevos módulos estilo Netflix)
                 Future<List<MediaItem>> tmdbPopularFuture =
                         pool.submit(() -> TmdbService.getPopularHomeItems(20));
                 stagger();
                 Future<List<MediaItem>> tmdbTrendingFuture =
                         pool.submit(() -> TmdbService.getTrendingHomeItems(20));
                 stagger();
+                Future<List<MediaItem>> tmdbNowPlayingFuture =
+                        pool.submit(() -> TmdbService.getNowPlayingMovies(16));
+                stagger();
+                Future<List<MediaItem>> tmdbUpcomingFuture =
+                        pool.submit(() -> TmdbService.getUpcomingMovies(16));
+                stagger();
+                Future<List<MediaItem>> tmdbTopRatedMoviesFuture =
+                        pool.submit(() -> TmdbService.getTopRatedMovies(16));
+                stagger();
+                Future<List<MediaItem>> tmdbTopRatedTvFuture =
+                        pool.submit(() -> TmdbService.getTopRatedTvShows(16));
+                stagger();
+                Future<List<MediaItem>> tmdbOnTheAirFuture =
+                        pool.submit(() -> TmdbService.getOnTheAirTvShows(16));
+                stagger();
+                Future<List<MediaItem>> tmdbDiscoverFuture =
+                        pool.submit(() -> TmdbService.getDiscoverItems(20));
+                stagger();
+
+                // Otros scrapers
                 Future<List<MediaItem>> pelispediaFuture =
                     pool.submit(() -> new PelispediaScraper().getHomeItems(12));
                 pool.shutdown();
@@ -403,6 +452,12 @@ public class HomeActivity extends AppCompatActivity {
                 List<AllCalidadScraper.ContentItem> popularSeries = safeGet(popularSeriesFuture);
                 List<MediaItem> tmdbPopular = safeGet(tmdbPopularFuture);
                 List<MediaItem> tmdbTrending = safeGet(tmdbTrendingFuture);
+                List<MediaItem> tmdbNowPlaying = safeGet(tmdbNowPlayingFuture);
+                List<MediaItem> tmdbUpcoming = safeGet(tmdbUpcomingFuture);
+                List<MediaItem> tmdbTopRatedMovies = safeGet(tmdbTopRatedMoviesFuture);
+                List<MediaItem> tmdbTopRatedTv = safeGet(tmdbTopRatedTvFuture);
+                List<MediaItem> tmdbOnTheAir = safeGet(tmdbOnTheAirFuture);
+                List<MediaItem> tmdbDiscover = safeGet(tmdbDiscoverFuture);
                 List<MediaItem> pelispediaItems = safeGet(pelispediaFuture);
 
                 List<MediaItem> featuredItems      = mapItems(featured,      10);
@@ -411,15 +466,23 @@ public class HomeActivity extends AppCompatActivity {
                 List<MediaItem> seriesItems        = mapItems(series,        16);
                 List<MediaItem> popularSeriesItems = mapItems(popularSeries, 16);
 
-                // Mostrar secciones SIN esperar TMDB
+                // Mostrar secciones SIN esperar TMDB enrichment
                 final List<Section> sections = buildSections(
                         featuredItems, popularItems, latestItems,
                         seriesItems, popularSeriesItems,
-                        tmdbPopular, tmdbTrending);
-                // add Pelispedia sections as independent group if available
+                        tmdbPopular, tmdbTrending,
+                        tmdbNowPlaying, tmdbUpcoming,
+                        tmdbTopRatedMovies, tmdbTopRatedTv,
+                        tmdbOnTheAir, tmdbDiscover);
+                // add Pelispedia sections if available
                 if (pelispediaItems != null && !pelispediaItems.isEmpty()) {
                     sections.add(new Section("Pelispedia - Destacadas", pelispediaItems));
                 }
+                Section continueSection = buildContinueWatchingSection();
+                if (continueSection != null) {
+                    sections.add(0, continueSection);
+                }
+                addUserDataSections(sections);
                 cacheHomeSections(sections);
 
                 runOnUiThread(() -> {
@@ -436,6 +499,10 @@ public class HomeActivity extends AppCompatActivity {
                 allItems.addAll(featuredItems); allItems.addAll(popularItems);
                 allItems.addAll(latestItems);   allItems.addAll(seriesItems);
                 allItems.addAll(popularSeriesItems);
+                allItems.addAll(tmdbPopular); allItems.addAll(tmdbTrending);
+                allItems.addAll(tmdbNowPlaying); allItems.addAll(tmdbUpcoming);
+                allItems.addAll(tmdbTopRatedMovies); allItems.addAll(tmdbTopRatedTv);
+                allItems.addAll(tmdbOnTheAir); allItems.addAll(tmdbDiscover);
                 TmdbService.enrichMediaItemsParallel(allItems);
 
                 runOnUiThread(() -> {
@@ -455,21 +522,137 @@ public class HomeActivity extends AppCompatActivity {
         }).start();
     }
 
+    private Section buildContinueWatchingSection() {
+        List<ContinueWatchingItem> items = ContinueWatchingStore.getAll(this);
+        if (items == null || items.isEmpty()) return null;
+
+        List<ContinueWatchingItem> active = new ArrayList<>();
+        for (ContinueWatchingItem item : items) {
+            if (!item.isCompleted() && item.getPositionMs() > 0) {
+                active.add(item);
+            }
+        }
+        if (active.isEmpty()) return null;
+
+        List<MediaItem> mediaItems = new ArrayList<>();
+        for (ContinueWatchingItem cw : active) {
+            String cleanTitle = cw.getSeriesTitle() != null && !cw.getSeriesTitle().isEmpty()
+                    ? cw.getSeriesTitle() : cw.getTitle();
+            MediaItem mi = new MediaItem(cleanTitle, "", cw.getImageUrl(), cw.getDetailUrl(), cw.getPostId());
+            mi.setMediaType(cw.getMediaType());
+            mi.setProgress(Math.min(99, cw.getProgressPercent()));
+            mi.setPostId(cw.getPostId());
+            mi.setTmdbId(cw.getTmdbId());
+            if (mi.getImagen() == null || mi.getImagen().isEmpty()) {
+                mi.setImagen(cw.getImageUrl());
+            }
+            mediaItems.add(mi);
+        }
+
+        return mediaItems.isEmpty() ? null : new Section("Continuar Viendo", mediaItems);
+    }
+
+    private void addUserDataSections(List<Section> sections) {
+        UserDataManager udm = UserDataManager.getInstance(this);
+        if (!udm.isRestoreComplete()) return;
+
+        List<FavoriteItem> favorites = udm.getFavorites();
+        if (favorites != null && !favorites.isEmpty()) {
+            List<MediaItem> favItems = new ArrayList<>();
+            for (FavoriteItem f : favorites) {
+                MediaItem mi = new MediaItem(f.getTitle(), "", f.getImageUrl(), "", 0);
+                mi.setMediaType(f.getMediaType());
+                mi.setPostId(parsePostId(f.getContentId()));
+                favItems.add(mi);
+            }
+            sections.add(0, new Section("❤️ Mis Favoritos", favItems));
+        }
+
+        List<WatchedHistoryItem> history = udm.getHistory();
+        if (history != null && !history.isEmpty()) {
+            List<MediaItem> histItems = new ArrayList<>();
+            int maxHistory = Math.min(history.size(), 20);
+            for (int i = 0; i < maxHistory; i++) {
+                WatchedHistoryItem h = history.get(i);
+                MediaItem mi = new MediaItem(h.getTitle(), "", h.getImageUrl(), "", 0);
+                mi.setMediaType(h.getMediaType());
+                mi.setPostId(parsePostId(h.getContentId()));
+                histItems.add(mi);
+            }
+            sections.add(1, new Section("🕐 Historial", histItems));
+        }
+    }
+
+    private void refreshUserDataSections() {
+        if (homeSectionsSnapshot.isEmpty()) return;
+        List<Section> updated = copySections(homeSectionsSnapshot);
+        updated.removeIf(s -> "❤️ Mis Favoritos".equals(s.getTitle()) || "🕐 Historial".equals(s.getTitle()));
+        addUserDataSections(updated);
+        homeSectionsSnapshot = copySections(updated);
+        showSections(updated);
+    }
+
+    private int parsePostId(String contentId) {
+        if (contentId == null) return 0;
+        try {
+            String[] parts = contentId.split("_");
+            if (parts.length > 0) {
+                String num = parts[0].replaceAll("[^0-9]", "");
+                return num.isEmpty() ? 0 : Integer.parseInt(num);
+            }
+        } catch (Exception ignored) {}
+        return 0;
+    }
+
     private List<Section> buildSections(
             List<MediaItem> fi, List<MediaItem> pi,
             List<MediaItem> li, List<MediaItem> si, List<MediaItem> psi,
-            List<MediaItem> tmdbPopular, List<MediaItem> tmdbTrending) {
+            List<MediaItem> tmdbPopular, List<MediaItem> tmdbTrending,
+            List<MediaItem> tmdbNowPlaying, List<MediaItem> tmdbUpcoming,
+            List<MediaItem> tmdbTopRatedMovies, List<MediaItem> tmdbTopRatedTv,
+            List<MediaItem> tmdbOnTheAir, List<MediaItem> tmdbDiscover) {
         List<Section> s = new ArrayList<>();
-        s.add(new Section("🔥 Destacadas",       fi.isEmpty() ? li : fi));
-        s.add(new Section("📈 Populares del Mes", pi.isEmpty() ? li : pi));
-        s.add(new Section("🎬 Últimas Películas", li));
-        if (!si.isEmpty())  s.add(new Section("📺 Series",          si));
-        if (!psi.isEmpty()) s.add(new Section("⭐ Series Populares", psi));
-        if (tmdbPopular != null && !tmdbPopular.isEmpty()) {
-            s.add(new Section("Populares TMDB", tmdbPopular));
+        // 1. Destacadas (AllCalidad)
+        s.add(new Section("🔥 Destacadas", fi.isEmpty() ? li : fi));
+        // 2. Ahora en Cines (TMDB)
+        if (tmdbNowPlaying != null && !tmdbNowPlaying.isEmpty()) {
+            s.add(new Section("🎥 Ahora en Cines", tmdbNowPlaying));
         }
+        // 3. Populares del Mes (AllCalidad)
+        s.add(new Section("📈 Populares del Mes", pi.isEmpty() ? li : pi));
+        // 4. Series en Emisión (TMDB)
+        if (tmdbOnTheAir != null && !tmdbOnTheAir.isEmpty()) {
+            s.add(new Section("📡 Series en Emisión", tmdbOnTheAir));
+        }
+        // 5. Últimas Películas (AllCalidad)
+        s.add(new Section("🎬 Últimas Películas", li));
+        // 6. Mejor Valoradas - Películas (TMDB)
+        if (tmdbTopRatedMovies != null && !tmdbTopRatedMovies.isEmpty()) {
+            s.add(new Section("🏆 Mejor Valoradas Películas", tmdbTopRatedMovies));
+        }
+        // 7. Series (AllCalidad)
+        if (!si.isEmpty()) s.add(new Section("📺 Series", si));
+        // 8. Mejor Valoradas - Series (TMDB)
+        if (tmdbTopRatedTv != null && !tmdbTopRatedTv.isEmpty()) {
+            s.add(new Section("🌟 Mejor Valoradas Series", tmdbTopRatedTv));
+        }
+        // 9. Series Populares (AllCalidad)
+        if (!psi.isEmpty()) s.add(new Section("⭐ Series Populares", psi));
+        // 10. Próximos Estrenos (TMDB)
+        if (tmdbUpcoming != null && !tmdbUpcoming.isEmpty()) {
+            s.add(new Section("📅 Próximos Estrenos", tmdbUpcoming));
+        }
+        // 11. Populares TMDB
+        if (tmdbPopular != null && !tmdbPopular.isEmpty()) {
+            s.add(new Section("🔥 Populares TMDB", tmdbPopular));
+        }
+        // 12. Tendencias (TMDB)
         if (tmdbTrending != null && !tmdbTrending.isEmpty()) {
-            s.add(new Section("Tendencias", tmdbTrending));
+            s.add(new Section("⚡ Tendencias", tmdbTrending));
+        }
+        // 13. Descubrimiento (TMDB)
+        if (tmdbDiscover != null && !tmdbDiscover.isEmpty()) {
+            s.add(new Section("✨ Descubrimiento", tmdbDiscover));
         }
         return s;
     }
@@ -630,9 +813,11 @@ public class HomeActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        CharSequence q = searchView != null ? searchView.getQuery() : "";
-        if (isSearchMode || (q != null && q.toString().trim().length() > 0)) {
-            exitSearchModeAndRestoreHome(); return;
+        if (isTv && searchView != null) {
+            CharSequence q = searchView.getQuery();
+            if (isSearchMode || (q != null && q.toString().trim().length() > 0)) {
+                exitSearchModeAndRestoreHome(); return;
+            }
         }
         super.onBackPressed();
     }

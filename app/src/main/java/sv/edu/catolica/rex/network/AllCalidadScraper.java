@@ -17,6 +17,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.zip.GZIPInputStream;
@@ -118,6 +119,39 @@ public class AllCalidadScraper {
                 API_BASE + "/search?query=" + encoded +
                         "&page=" + page +
                         "&post_type=movies%2Ctvshows%2Canimes&posts_per_page=16"));
+    }
+
+    /**
+     * Busca un contenido en AllCalidad por título y año.
+     * Útil para items provenientes de TMDB que no tienen postId.
+     * Devuelve el primer ContentItem que coincida (o null si no encuentra).
+     */
+    public static ContentItem findByTitleAndYear(String title, String year, String mediaType) {
+        if (title == null || title.trim().isEmpty()) return null;
+        try {
+            String safeType = "movies";
+            if (mediaType != null) {
+                String lower = mediaType.trim().toLowerCase(Locale.ROOT);
+                if ("tvshows".equals(lower) || "animes".equals(lower) || "series".equals(lower) || "tv".equals(lower)) {
+                    safeType = "tvshows";
+                }
+            }
+            List<ContentItem> results = search(title, 1);
+            if (results == null || results.isEmpty()) return null;
+            // Preferir match exacto de año si se proporciona
+            if (year != null && year.matches("\\d{4}")) {
+                for (ContentItem item : results) {
+                    if (item.year != null && item.year.equals(year)) {
+                        return item;
+                    }
+                }
+            }
+            // Fallback: devolver el primer resultado
+            return results.get(0);
+        } catch (Exception e) {
+            Log.w(TAG, "findByTitleAndYear falló para " + title + ": " + e.getMessage());
+            return null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

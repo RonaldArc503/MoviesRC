@@ -227,6 +227,32 @@ public class TmdbService {
         return out;
     }
 
+    public static List<MediaItem> getNowPlayingMovies(int limit) {
+        return fetchHomeItemsByEndpoint("/movie/now_playing", "movie", limit);
+    }
+
+    public static List<MediaItem> getUpcomingMovies(int limit) {
+        return fetchHomeItemsByEndpoint("/movie/upcoming", "movie", limit);
+    }
+
+    public static List<MediaItem> getTopRatedMovies(int limit) {
+        return fetchHomeItemsByEndpoint("/movie/top_rated", "movie", limit);
+    }
+
+    public static List<MediaItem> getTopRatedTvShows(int limit) {
+        return fetchHomeItemsByEndpoint("/tv/top_rated", "tv", limit);
+    }
+
+    public static List<MediaItem> getOnTheAirTvShows(int limit) {
+        return fetchHomeItemsByEndpoint("/tv/on_the_air", "tv", limit);
+    }
+
+    public static List<MediaItem> getDiscoverItems(int limit) {
+        List<MediaItem> movies = fetchHomeItemsByEndpoint("/discover/movie?sort_by=popularity.desc&vote_count.gte=100", "movie", limit);
+        List<MediaItem> tv = fetchHomeItemsByEndpoint("/discover/tv?sort_by=popularity.desc&vote_count.gte=50", "tv", limit);
+        return mergeInterleavedAndTrim(movies, tv, limit);
+    }
+
     public static List<MediaItem> searchMedia(String query, int limit) {
         List<MediaItem> out = new ArrayList<>();
         if (query == null || query.trim().isEmpty() || limit <= 0

@@ -1,5 +1,6 @@
 package sv.edu.catolica.rex.ui.player;
 
+import android.annotation.SuppressLint;
 import android.app.UiModeManager;
 import android.content.pm.ActivityInfo;
 import android.content.Context;
@@ -12,6 +13,8 @@ import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
+import android.widget.SeekBar;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -36,7 +39,9 @@ import java.util.Map;
 import org.json.JSONException;
 import org.json.JSONObject;
 import sv.edu.catolica.rex.R;
+import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
+import sv.edu.catolica.rex.storage.ContinueWatchingStore;
 
 public class PlayerContenidoActivity extends AppCompatActivity {
 
@@ -57,12 +62,18 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private static final int MAX_RETRIES_PER_SERVER = 1;
     private static final long RETRY_DELAY_MS = 700L;
     private static final long PLAYBACK_POLL_INTERVAL_MS = 1000L;
-    private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 198d;
+    private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 30d;
     private static final double NEXT_EPISODE_HIDE_HYSTERESIS_SEC = 12d;
     private static final double AUTO_NEXT_REMAINING_SEC = 1.2d;
     private static final String NEXT_EPISODE_LABEL_BASE = "Siguiente episodio";
     /** Tiempo de inactividad en TV antes de ocultar los controles del player (ms) */
     private static final long TV_CONTROLS_HIDE_DELAY_MS = 3500L;
+
+    private static final String EXTRA_IMAGE_URL = "image_url";
+    private static final String EXTRA_RESUME_POSITION_MS = "resume_position_ms";
+    private static final long PLAYBACK_SAVE_INTERVAL_MS = 10000L;
+    private static final long SEEK_RETRY_DELAY_MS = 500L;
+    private static final int SEEK_MAX_RETRIES = 10;
 
     private WebView webView;
     private ProgressBar progressBar;
@@ -98,6 +109,30 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private final Runnable tvHideControlsRunnable = this::injectTvControlsHide;
 
     private NextEpisodeInfo nextEpisodeInfo;
+
+    private long resumePositionMs = 0;
+    private double lastSavedPositionSec = -1;
+    private boolean positionRestored = false;
+    private long contentDurationMs = 0;
+    private String contentId = "";
+    private String imageUrl = "";
+
+    // Controls overlay
+    private View controlOverlay;
+    private View centerControls;
+    private ImageButton btnPlayCenter;
+    private ImageButton btnPlaySmall;
+    private ImageButton btnSkipBack;
+    private ImageButton btnSkipForward;
+    private ImageButton btnSpeed;
+    private SeekBar seekBar;
+    private TextView tvCurrentTime;
+    private TextView tvDuration;
+    private TextView tvTitle;
+    private boolean controlsVisible = false;
+    private long lastVideoDurationMs = 0;
+    private long lastVideoTapUpMs = 0L;
+    private float lastVideoTapX = -1f;
 
     private final Runnable playbackMonitorRunnable = new Runnable() {
         @Override
@@ -199,6 +234,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         progressBar = findViewById(R.id.progressBar);
         nextEpisodeButton = findViewById(R.id.btn_next_episode);
         nextEpisodeLoaderText = findViewById(R.id.tv_next_loader);
+        initControls();
 
         ArrayList<String> urls = getIntent().getStringArrayListExtra(EXTRA_URLS);
         String url = getIntent().getStringExtra(EXTRA_URL);
@@ -210,6 +246,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         currentEpisodeId = getIntent().getIntExtra(EXTRA_EPISODE_ID, -1);
         currentSeasonNumber = getIntent().getIntExtra(EXTRA_SEASON_NUMBER, -1);
         currentEpisodeNumber = getIntent().getIntExtra(EXTRA_EPISODE_NUMBER, -1);
+        resumePositionMs = getIntent().getLongExtra(EXTRA_RESUME_POSITION_MS, 0L);
+        imageUrl = getIntent().getStringExtra(EXTRA_IMAGE_URL);
 
         if (seriesTitle == null || seriesTitle.trim().isEmpty()) {
             seriesTitle = title;
@@ -217,6 +255,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (seriesTitle == null || seriesTitle.trim().isEmpty()) {
             seriesTitle = "Reproduciendo";
         }
+
+        contentId = buildContentId();
 
         if (title != null) setTitle(title);
         else setTitle("Reproduciendo");
@@ -281,6 +321,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
+        settings.setSupportZoom(false);
+        webView.setOnLongClickListener(v -> true);
         webView.setWebViewClient(new WebViewClient() {
 
             @Override
@@ -319,12 +363,15 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                     );
                 }
 
+                injectHideVideoControls();
+
                 scheduleServerTimeout();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 pageLoaded = true;
+                handler.postDelayed(() -> showControls(), 1000);
                 currentServerRetry = 0;
                 failoverInProgress = false;
                 cancelServerTimeout();
@@ -345,9 +392,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 }
 
                 applyJwFullscreenFix(url);
+                injectHideVideoControls();
+                handler.postDelayed(PlayerContenidoActivity.this::injectHideVideoControls, 1500);
+                handler.postDelayed(PlayerContenidoActivity.this::injectHideVideoControls, 3000);
 
                 triggerAutoPlayAttempts();
                 startPlaybackMonitor();
+                schedulePositionRestore();
                 if (isTvDevice) {
                     scheduleTvControlsHide();
                 }
@@ -381,54 +432,16 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
-                showCustomView(view, callback);
+                if (callback != null) callback.onCustomViewHidden();
             }
 
             @Override
             public void onShowCustomView(View view, int requestedOrientation, CustomViewCallback callback) {
-                showCustomView(view, callback);
+                if (callback != null) callback.onCustomViewHidden();
             }
 
             @Override
             public void onHideCustomView() {
-                hideCustomView();
-            }
-
-            private void showCustomView(View view, CustomViewCallback callback) {
-                if (PlayerContenidoActivity.this.customView != null) {
-                    if (callback != null) {
-                        callback.onCustomViewHidden();
-                    }
-                    return;
-                }
-                PlayerContenidoActivity.this.customView = view;
-                PlayerContenidoActivity.this.customViewCallback = callback;
-                FrameLayout decorView = (FrameLayout) getWindow().getDecorView();
-                decorView.addView(PlayerContenidoActivity.this.customView, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                ));
-                if (webView != null) {
-                    webView.setVisibility(View.GONE);
-                }
-                enterImmersiveMode();
-            }
-
-            private void hideCustomView() {
-                if (PlayerContenidoActivity.this.customView == null) {
-                    return;
-                }
-                FrameLayout decorView = (FrameLayout) getWindow().getDecorView();
-                decorView.removeView(PlayerContenidoActivity.this.customView);
-                PlayerContenidoActivity.this.customView = null;
-                if (webView != null) {
-                    webView.setVisibility(View.VISIBLE);
-                }
-                if (PlayerContenidoActivity.this.customViewCallback != null) {
-                    PlayerContenidoActivity.this.customViewCallback.onCustomViewHidden();
-                    PlayerContenidoActivity.this.customViewCallback = null;
-                }
-                enterImmersiveMode();
             }
         });
         webView.setOnTouchListener((v, event) -> {
@@ -441,13 +454,42 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 // Limpiar overlays de anuncios antes de que el toque llegue al WebView
                 if (pageLoaded) {
                     removeAdOverlays();
+                    showControls();
                 }
             }
-            // Pasar los toques al WebView para que el usuario pueda interactuar
-            // con el reproductor de video (play, pausa, seek, fullscreen)
+            if (action == MotionEvent.ACTION_UP && handleVideoSurfaceTap(v, event)) {
+                return true;
+            }
             return false;
         });
         webView.setVisibility(android.view.View.VISIBLE);
+    }
+
+    private boolean handleVideoSurfaceTap(View surface, MotionEvent event) {
+        long now = event.getEventTime();
+        int doubleTapTimeout = android.view.ViewConfiguration.getDoubleTapTimeout();
+        float maxDistance = 80f * getResources().getDisplayMetrics().density;
+        boolean doubleTap = lastVideoTapUpMs > 0
+                && now - lastVideoTapUpMs <= doubleTapTimeout
+                && Math.abs(event.getX() - lastVideoTapX) <= maxDistance;
+
+        lastVideoTapUpMs = now;
+        lastVideoTapX = event.getX();
+
+        if (!doubleTap) {
+            return false;
+        }
+
+        lastVideoTapUpMs = 0L;
+        if (event.getX() < surface.getWidth() / 2f) {
+            webViewSkip(-10000);
+            Toast.makeText(this, "-10 s", Toast.LENGTH_SHORT).show();
+        } else {
+            webViewSkip(10000);
+            Toast.makeText(this, "+10 s", Toast.LENGTH_SHORT).show();
+        }
+        showControls();
+        return true;
     }
 
     private void removeAdOverlays() {
@@ -730,16 +772,14 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void inspectPlaybackState() {
-        if (!isSeriesEpisodePlayback() || webView == null) {
+        if (webView == null) {
             return;
         }
 
-        if (nextEpisodeInfo == null && !loadingSeasonData) {
-            preloadSeasonData();
-        }
-        if (nextEpisodeInfo == null) {
-            hideNextEpisodeButton(false);
-            return;
+        if (isSeriesEpisodePlayback()) {
+            if (nextEpisodeInfo == null && !loadingSeasonData) {
+                preloadSeasonData();
+            }
         }
 
         String js = "(function(){"
@@ -766,23 +806,34 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void handlePlaybackProbe(String raw) {
-        if (raw == null || raw.trim().isEmpty() || "null".equals(raw) || nextEpisodeInfo == null) {
+        if (raw == null || raw.trim().isEmpty() || "null".equals(raw)) {
             return;
         }
 
         try {
             JSONObject state = new JSONObject(raw);
             if (!state.optBoolean("hasMedia", false)) {
-                hideNextEpisodeButton(false);
+                if (isSeriesEpisodePlayback()) hideNextEpisodeButton(false);
                 return;
             }
 
+            double currentTime = state.optDouble("currentTime", 0d);
             double duration = state.optDouble("duration", 0d);
             double remaining = state.optDouble("remaining", Double.MAX_VALUE);
             boolean ended = state.optBoolean("ended", false);
 
+            updateOverlayState(currentTime, duration, false);
+            savePlaybackProgress(currentTime, duration);
+
+            if (!isSeriesEpisodePlayback()) {
+                return;
+            }
+
             if ((ended || remaining <= AUTO_NEXT_REMAINING_SEC) && !autoNextTriggeredForCurrent) {
                 autoNextTriggeredForCurrent = true;
+                if (contentId != null && !contentId.isEmpty()) {
+                    ContinueWatchingStore.markCompleted(PlayerContenidoActivity.this, contentId);
+                }
                 playNextEpisode(true);
                 return;
             }
@@ -1033,6 +1084,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (isFinishing() || isDestroyed()) {
             return;
         }
+        if (lastSavedPositionSec >= 0) {
+            savePlaybackProgress(lastSavedPositionSec,
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+        }
         exoSwitchInProgress = true;
         ArrayList<String> direct = new ArrayList<>();
         direct.add(streamUrl.trim());
@@ -1136,6 +1191,79 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
         return null;
     }
+    private void savePlaybackProgress(double currentTimeSec, double durationSec) {
+        if (contentId == null || contentId.isEmpty() || currentTimeSec < 0) return;
+
+        contentDurationMs = (long) (durationSec * 1000);
+        long positionMs = (long) (currentTimeSec * 1000);
+
+        if (Math.abs(currentTimeSec - lastSavedPositionSec) < 8.0) return;
+        lastSavedPositionSec = currentTimeSec;
+
+        ContinueWatchingItem item = new ContinueWatchingItem();
+        item.setContentId(contentId);
+        item.setTitle(getTitle() != null ? getTitle().toString() : "");
+        item.setSeriesTitle(seriesTitle);
+        item.setImageUrl(imageUrl);
+        item.setPostId(seriesPostId > 0 ? seriesPostId : (currentEpisodeId > 0 ? currentEpisodeId : 0));
+        if (isSeriesEpisodePlayback()) {
+            item.setEpisodeId(currentEpisodeId);
+            item.setSeasonNumber(currentSeasonNumber);
+            item.setEpisodeNumber(currentEpisodeNumber);
+        }
+        item.setPositionMs(positionMs);
+        item.setDurationMs(contentDurationMs);
+        if (durationSec > 0) {
+            item.setProgressPercent(Math.min(99, (int) (currentTimeSec / durationSec * 100)));
+        }
+        item.setCompleted(false);
+
+        ContinueWatchingStore.save(this, item);
+    }
+
+    private void schedulePositionRestore() {
+        if (resumePositionMs <= 0 || positionRestored) return;
+        final int[] retries = {0};
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (webView == null || isFinishing() || isDestroyed()) return;
+                double targetSec = resumePositionMs / 1000.0;
+                String js = "(function(){"
+                        + "try{"
+                        + "var v=document.querySelector('video');"
+                        + "if(v&&isFinite(v.duration)&&v.duration>0){"
+                        + "  v.currentTime=" + targetSec + ";"
+                        + "  return true;"
+                        + "}"
+                        + "return false;"
+                        + "}catch(e){return false;}"
+                        + "})();";
+                webView.evaluateJavascript(js, result -> {
+                    if ("true".equals(result)) {
+                        positionRestored = true;
+                    } else if (retries[0] < SEEK_MAX_RETRIES) {
+                        retries[0]++;
+                        handler.postDelayed(this, SEEK_RETRY_DELAY_MS);
+                    }
+                });
+            }
+        }, 1500L);
+    }
+
+    private String buildContentId() {
+        if (isSeriesEpisodePlayback() && currentEpisodeId > 0) {
+            return seriesPostId + "_" + currentEpisodeId;
+        }
+        if (currentEpisodeId > 0) {
+            return "ep_" + currentEpisodeId;
+        }
+        if (seriesPostId > 0) {
+            return "post_" + seriesPostId;
+        }
+        return "";
+    }
+
     private void loadCurrentServer() {
         if (currentServerIndex < 0 || currentServerIndex >= serverUrls.size()) {
             onAllServersFailed();
@@ -1286,6 +1414,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void finishWithResult() {
+        if (lastSavedPositionSec >= 0) {
+            savePlaybackProgress(lastSavedPositionSec,
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+        }
         setPlaybackResult();
         finish();
     }
@@ -1332,6 +1464,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         handler.removeCallbacks(autoPlayRunnable);
         handler.removeCallbacks(playbackMonitorRunnable);
         handler.removeCallbacks(tvHideControlsRunnable);
+        if (lastSavedPositionSec >= 0) {
+            savePlaybackProgress(lastSavedPositionSec,
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+        }
         setPlaybackResult();
         if (webView != null) {
             webView.destroy();
@@ -1345,9 +1481,200 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         resumed = false;
         handler.removeCallbacks(playbackMonitorRunnable);
         handler.removeCallbacks(tvHideControlsRunnable);
+        if (lastSavedPositionSec >= 0) {
+            savePlaybackProgress(lastSavedPositionSec,
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+        }
         if (webView != null) {
             webView.onPause();
         }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private void initControls() {
+        controlOverlay = findViewById(R.id.control_overlay);
+        centerControls = findViewById(R.id.center_controls);
+        btnPlayCenter = findViewById(R.id.btn_play_center);
+        btnPlaySmall = findViewById(R.id.btn_play_small);
+        btnSkipBack = findViewById(R.id.btn_skip_back);
+        btnSkipForward = findViewById(R.id.btn_skip_forward);
+        btnSpeed = findViewById(R.id.btn_speed);
+        seekBar = findViewById(R.id.player_seekbar);
+        tvCurrentTime = findViewById(R.id.tv_current_time);
+        tvDuration = findViewById(R.id.tv_duration);
+        tvTitle = findViewById(R.id.tv_player_title);
+
+        tvTitle.setText(getTitle() != null ? getTitle() : "Reproduciendo");
+
+        findViewById(R.id.btn_quality).setVisibility(View.GONE);
+        findViewById(R.id.btn_subtitles).setVisibility(View.GONE);
+        findViewById(R.id.btn_audio).setVisibility(View.GONE);
+        findViewById(R.id.btn_fullscreen).setVisibility(View.GONE);
+        findViewById(R.id.btn_lock).setVisibility(View.GONE);
+
+        controlOverlay.setVisibility(View.VISIBLE);
+        controlOverlay.setAlpha(0f);
+        controlOverlay.setOnClickListener(v -> toggleControls());
+
+        btnPlayCenter.setOnClickListener(v -> toggleWebViewPlayback());
+        btnPlaySmall.setOnClickListener(v -> toggleWebViewPlayback());
+        btnSkipBack.setOnClickListener(v -> webViewSkip(-10000));
+        btnSkipForward.setOnClickListener(v -> webViewSkip(10000));
+        btnSpeed.setOnClickListener(v -> showWebViewSpeedSelector());
+
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            private boolean fromUser = false;
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                this.fromUser = fromUser;
+            }
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                fromUser = true;
+                cancelAutoHide();
+            }
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                if (fromUser && lastVideoDurationMs > 0) {
+                    long seekPos = lastVideoDurationMs * seekBar.getProgress() / seekBar.getMax();
+                    webViewSeekTo(seekPos);
+                }
+                fromUser = false;
+                resetAutoHide();
+            }
+        });
+    }
+
+    private void toggleWebViewPlayback() {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+            "(function(){try{var v=document.querySelector('video');if(v){if(v.paused){v.play()}else{v.pause()}}return!!(v&&!v.paused)}catch(e){return false}})();",
+            result -> {
+                boolean playing = "true".equals(result);
+                updatePlayPauseIcons(playing);
+            });
+        resetAutoHide();
+    }
+
+    private void webViewSkip(long deltaMs) {
+        if (webView == null || lastVideoDurationMs <= 0) return;
+        webView.evaluateJavascript(
+            "(function(){try{var v=document.querySelector('video');if(v){var t=Math.max(0,Math.min(v.duration||0,v.currentTime+" + deltaMs / 1000.0 + "));v.currentTime=t;return true}return false}catch(e){return false}})();",
+            null);
+        resetAutoHide();
+    }
+
+    private void webViewSeekTo(long positionMs) {
+        if (webView == null) return;
+        double targetSec = positionMs / 1000.0;
+        webView.evaluateJavascript(
+            "(function(){try{var v=document.querySelector('video');if(v&&isFinite(v.duration)&&v.duration>0){v.currentTime=" + targetSec + ";return true}return false}catch(e){return false}})();",
+            null);
+    }
+
+    private void showWebViewSpeedSelector() {
+        final double[] speeds = {0.5d, 0.75d, 1d, 1.25d, 1.5d, 1.75d, 2d};
+        String[] labels = {"0.5x", "0.75x", "Normal", "1.25x", "1.5x", "1.75x", "2x"};
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Velocidad")
+                .setSingleChoiceItems(labels, 2, (dialog, which) -> {
+                    setWebViewPlaybackSpeed(speeds[which]);
+                    resetAutoHide();
+                    dialog.dismiss();
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
+    private void setWebViewPlaybackSpeed(double speed) {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+                "(function(){try{var media=document.querySelectorAll('video,audio');"
+                        + "for(var i=0;i<media.length;i++){media[i].playbackRate=" + speed + ";}"
+                        + "return media.length>0;}catch(e){return false}})();",
+                null);
+    }
+
+    private void updateOverlayState(double currentTimeSec, double durationSec, boolean isPaused) {
+        if (controlOverlay == null) return;
+        lastVideoDurationMs = (long) (durationSec * 1000);
+        long posMs = (long) (currentTimeSec * 1000);
+        long durMs = (long) (durationSec * 1000);
+
+        tvCurrentTime.setText(formatTime(posMs));
+        tvDuration.setText(formatTime(durMs));
+
+        if (seekBar != null && durMs > 0) {
+            int progress = (int) (posMs * seekBar.getMax() / durMs);
+            seekBar.setProgress(progress);
+        }
+
+        updatePlayPauseIcons(!isPaused);
+    }
+
+    private void updatePlayPauseIcons(boolean playing) {
+        if (btnPlayCenter == null || btnPlaySmall == null) return;
+        int icon = playing ? R.drawable.ic_pause : R.drawable.ic_play;
+        btnPlayCenter.setImageResource(icon);
+        if (btnPlaySmall != null) {
+            btnPlaySmall.setImageResource(icon);
+        }
+    }
+
+    private String formatTime(long ms) {
+        if (ms <= 0) return "0:00";
+        int totalSec = (int) (ms / 1000);
+        int h = totalSec / 3600;
+        int m = (totalSec % 3600) / 60;
+        int s = totalSec % 60;
+        if (h > 0) {
+            return String.format(Locale.US, "%d:%02d:%02d", h, m, s);
+        }
+        return String.format(Locale.US, "%d:%02d", m, s);
+    }
+
+    private void showControls() {
+        if (controlOverlay == null) return;
+        controlsVisible = true;
+        controlOverlay.setVisibility(View.VISIBLE);
+        controlOverlay.animate().alpha(1f).setDuration(200).start();
+        cancelAutoHide();
+        resetAutoHide();
+    }
+
+    private void hideControls() {
+        if (controlOverlay == null) return;
+        controlsVisible = false;
+        controlOverlay.animate()
+                .alpha(0f)
+                .setDuration(300)
+                .withEndAction(() -> {
+                    if (!controlsVisible) controlOverlay.setVisibility(View.GONE);
+                })
+                .start();
+    }
+
+    private void toggleControls() {
+        if (controlsVisible) {
+            hideControls();
+        } else {
+            showControls();
+        }
+    }
+
+    private final Runnable autoHideRunnable = () -> {
+        if (controlsVisible) hideControls();
+    };
+
+    private void resetAutoHide() {
+        cancelAutoHide();
+        if (controlsVisible) {
+            handler.postDelayed(autoHideRunnable, 3000L);
+        }
+    }
+
+    private void cancelAutoHide() {
+        handler.removeCallbacks(autoHideRunnable);
     }
 
     @Override
@@ -1398,14 +1725,101 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
     }
 
+    private void injectHideVideoControls() {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+            "(function(){"
+            + "try{"
+            // ── Style: ocultar controles nativos HTML5 y JW Player ──
+            + "var styleId='rex-hide-all-controls';"
+            + "if(!document.getElementById(styleId)){"
+            + "  var s=document.createElement('style');"
+            + "  s.id=styleId;"
+            + "  s.textContent="
+            // Nativo HTML5
+            + "  'video::-webkit-media-controls{display:none!important}'"
+            + "  +'video::-webkit-media-controls-enclosure{display:none!important}'"
+            + "  +'video::-webkit-media-controls-panel{display:none!important}'"
+            + "  +'video::-webkit-media-controls-overlay-play-button{display:none!important}'"
+            + "  +'video::-webkit-media-controls-start-playback-button{display:none!important}'"
+            // JW Player: barra inferior, display central, overlays
+            + "  +'.jw-controlbar{display:none!important}'"
+            + "  +'.jw-controls{display:none!important}'"
+            + "  +'.jw-controls-backdrop{display:none!important}'"
+            + "  +'.jw-display-controls{display:none!important}'"
+            + "  +'.jw-display-icon-container{display:none!important}'"
+            + "  +'.jw-title{display:none!important}'"
+            + "  +'.jw-logo{display:none!important}'"
+            + "  +'.jw-overlays{display:none!important}'"
+            + "  +'.jw-dock-buttons{display:none!important}'"
+            + "  +'.jw-nextup-container{display:none!important}'"
+            + "  +'.jw-info-container{display:none!important}'"
+            + "  +'.jw-featured{display:none!important}'"
+            + "  +'.jw-rightclick{display:none!important}'"
+            // Forzar video a llenar contenedor
+            + "  +'.jw-video,.jw-media,.jw-wrapper{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;background:#000!important}'"
+            + "  +'video{width:100%!important;height:100%!important;object-fit:contain!important;background:#000!important}';"
+            + "  document.head.appendChild(s);"
+            + "}"
+            // ── Remover atributo controls de todos los <video> ──
+            + "document.querySelectorAll('video').forEach(function(v){"
+            + "  v.removeAttribute('controls');"
+            + "  v.setAttribute('playsinline','');"
+            + "  v.setAttribute('webkit-playsinline','');"
+            + "});"
+            // ── JW Player API: desactivar controles ──
+            + "try{if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}}catch(e){}"
+            + "try{if(window.jwplayer){var jw=window.jwplayer();if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}}}" +
+            "catch(e){}"
+            + "try{if(window.jwplayer){var jw2=window.jwplayer('vplayer');if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}}}" +
+            "catch(e){}"
+            // ── MutationObserver para videos dinámicos ──
+            + "if(!window.__rexVideoObserver){"
+            + "  window.__rexVideoObserver=true;"
+            + "  new MutationObserver(function(m){"
+            + "    m.forEach(function(mut){"
+            + "      mut.addedNodes.forEach(function(n){"
+            + "        if(n.nodeName==='VIDEO'){"
+            + "          n.removeAttribute('controls');"
+            + "          n.setAttribute('playsinline','');"
+            + "        }"
+            + "        if(n.querySelectorAll){"
+            + "          n.querySelectorAll('video').forEach(function(v){"
+            + "            v.removeAttribute('controls');"
+            + "            v.setAttribute('playsinline','');"
+            + "          });"
+            + "        }"
+            + "      });"
+            + "    });"
+            + "  }).observe(document,{childList:true,subtree:true});"
+            + "}"
+            // ── Polling: JW Player puede inicializarse después ──
+            + "if(!window.__rexJwPolling){"
+            + "  window.__rexJwPolling=true;"
+            + "  var attempts=0;"
+            + "  var pollTimer=setInterval(function(){"
+            + "    attempts++;"
+            + "    try{"
+            + "      if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}"
+            + "      if(window.jwplayer){"
+            + "        var jw=window.jwplayer();"
+            + "        if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}"
+            + "        var jw2=window.jwplayer('vplayer');"
+            + "        if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}"
+            + "      }"
+            + "    }catch(e){}"
+            + "    if(attempts>20)clearInterval(pollTimer);"
+            + "  },500);"
+            + "}"
+            + "}catch(e){}"
+            + "})();", null
+        );
+    }
+
     private boolean isTelevision() {
-        UiModeManager uiModeManager = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
-        if (uiModeManager != null &&
-                uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
-            return true;
-        }
-        int uiMode = getResources().getConfiguration().uiMode;
-        return (uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION;
+        UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);
+        return uiModeManager != null
+                && uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 
     // ── TV: auto-ocultar controles del reproductor por inactividad ──────────────

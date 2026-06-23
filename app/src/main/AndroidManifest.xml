@@ -23,8 +23,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.REX">
         <activity
-            android:name=".ui.home.HomeActivity"
-            android:banner="@mipmap/ic_launcher"
+            android:name=".ui.auth.LoginActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -32,7 +31,11 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".ui.home.TvSearchActivity" />
+        <activity
+            android:name=".ui.home.HomeActivity"
+            android:banner="@mipmap/ic_launcher"
+            android:exported="true" />
+        <activity android:name=".ui.home.SearchActivity" />
         <activity android:name=".ui.home.TvChannelsActivity" />
         <activity android:name=".ui.football.FootballActivity" />
         <activity

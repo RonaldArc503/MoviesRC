@@ -23,10 +23,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import sv.edu.catolica.rex.R;
+import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
 import sv.edu.catolica.rex.network.smart.SmartScraperEngine;
+import sv.edu.catolica.rex.models.FavoriteItem;
+import sv.edu.catolica.rex.models.UserSettings;
+import sv.edu.catolica.rex.models.WatchedHistoryItem;
+import sv.edu.catolica.rex.repository.UserDataManager;
+import sv.edu.catolica.rex.storage.ContinueWatchingStore;
 import sv.edu.catolica.rex.ui.player.PlayerContenidoActivity;
 import sv.edu.catolica.rex.ui.player.PlaybackCacheHelper;
 
@@ -72,6 +78,12 @@ public class DetalleActivity extends AppCompatActivity {
     private int episodesFirstVisiblePos = 0;
     private int episodesTopOffset = 0;
     private String lastPrefetchedUrl = "";
+    private long resumePositionMs = 0;
+    private String resumeContentId = "";
+    private ContinueWatchingItem resumeItem;
+    private boolean isFavorite = false;
+    private View btnFavorite;
+    private UserDataManager.DataChangeListener userDataListener;
 
     private final ActivityResultLauncher<Intent> playerLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -102,12 +114,23 @@ public class DetalleActivity extends AppCompatActivity {
         // Recibir datos
         mediaItem = (MediaItem) getIntent().getSerializableExtra(EXTRA_MEDIA_ITEM);
         if (mediaItem == null) {
-            Toast.makeText(this, "Error: no se recibiÃ³ informaciÃ³n", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Error: no se recibi\u00f3 informaci\u00f3n", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
 
+        resumeItem = ContinueWatchingStore.getByPostId(this, mediaItem.getPostId());
+        if (resumeItem != null && !resumeItem.isCompleted() && resumeItem.getPositionMs() > 0) {
+            resumePositionMs = resumeItem.getPositionMs();
+            resumeContentId = resumeItem.getContentId();
+        } else {
+            resumePositionMs = 0;
+            resumeContentId = "";
+        }
+
         displayBasicInfo();
+        updateFavoriteButtonState();
+        registerUserDataListener();
         if (savedInstanceState != null) {
             selectedEpisodeId = savedInstanceState.getInt("selected_episode_id", -1);
             episodesFirstVisiblePos = savedInstanceState.getInt("episodes_scroll_pos", 0);
@@ -144,9 +167,11 @@ public class DetalleActivity extends AppCompatActivity {
             tvSynopsisToggle = findViewById(R.id.tv_synopsis_toggle);
             llSeasonHeader = findViewById(R.id.ll_season_header);
             tvSeasonSelector = findViewById(R.id.tv_season_selector);
+            btnFavorite = findViewById(R.id.btn_favorite);
         } else {
             panelEpisodes = findViewById(R.id.panel_episodes);
             ivBack = findViewById(R.id.iv_back);
+            btnFavorite = findViewById(R.id.btn_like);
         }
     }
 
@@ -231,6 +256,16 @@ public class DetalleActivity extends AppCompatActivity {
                     // Non-AllCalidad series won't have seasons/episode ids; at least try S01E01 via smart providers.
                     urls = smartScraperEngine.resolveEpisodeUrls(DetalleActivity.this, mediaItem, 1, 1);
                     seasons = TmdbService.getTvSeasonsFallback(mediaItem);
+                }
+
+                // ─── Fallback: si postId <= 0 y no hay URLs, buscar en AllCalidad por título ───
+                if (postId <= 0 && (urls == null || urls.isEmpty())) {
+                    AllCalidadScraper.ContentItem found = AllCalidadScraper.findByTitleAndYear(
+                            mediaItem.getTitulo(), mediaItem.getAnio(), mediaType);
+                    if (found != null && found.id > 0) {
+                        postId = found.id;
+                        mediaItem.setPostId(postId);
+                    }
                 }
 
                 if (postId > 0) {
@@ -371,6 +406,7 @@ public class DetalleActivity extends AppCompatActivity {
                             episode.seasonNumber,
                             episode.episodeNumber
                     );
+                    addResumeExtras(playerIntent, episode.id);
                     playerLauncher.launch(playerIntent);
                 });
             } catch (Exception e) {
@@ -381,12 +417,39 @@ public class DetalleActivity extends AppCompatActivity {
         }).start();
     }
 
+    private void addResumeExtras(Intent intent) {
+        addResumeExtras(intent, -1);
+    }
+
+    private void addResumeExtras(Intent intent, int targetEpisodeId) {
+        if (resumePositionMs > 0 && resumeContentId != null && !resumeContentId.isEmpty()) {
+            if (targetEpisodeId <= 0 || (resumeItem != null && resumeItem.getEpisodeId() == targetEpisodeId)) {
+                intent.putExtra("resume_position_ms", resumePositionMs);
+                intent.putExtra("exo_resume_position_ms", resumePositionMs);
+            }
+        }
+        if (resumeContentId != null && !resumeContentId.isEmpty()) {
+            intent.putExtra("exo_content_id", resumeContentId);
+            intent.putExtra("exo_post_id", mediaItem.getPostId());
+            intent.putExtra("exo_media_type", mediaItem.getMediaType());
+            intent.putExtra("exo_series_title", mediaItem.getTitulo());
+        }
+        // Keys para PlayerContenidoActivity (WebView player)
+        intent.putExtra("series_post_id", mediaItem.getPostId());
+        intent.putExtra("series_title", mediaItem.getTitulo());
+        intent.putExtra("series_post_type", mediaItem.getMediaType());
+        String img = mediaItem.getImagen();
+        if (img != null && !img.isEmpty()) {
+            intent.putExtra("image_url", img);
+            intent.putExtra("exo_image_url", img);
+        }
+    }
+
     private void updatePlayButtonState() {
         btnPlay.setVisibility(View.VISIBLE);
 
         if (isSeries) {
             if (firstSeriesEpisode == null) {
-                // Fallback: allow playback if we resolved at least one playable URL (S01E01).
                 if (playUrls.isEmpty()) {
                     btnPlay.setEnabled(false);
                     btnPlay.setText("No disponible");
@@ -394,12 +457,17 @@ public class DetalleActivity extends AppCompatActivity {
                 }
 
                 btnPlay.setEnabled(true);
-                btnPlay.setText("Reproducir T1:E1");
+                btnPlay.setText(resumePositionMs > 0 ? "Continuar T1:E1" : "Reproducir T1:E1");
                 return;
             }
 
             btnPlay.setEnabled(true);
-            btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
+            if (resumePositionMs > 0 && resumeItem != null && resumeItem.getEpisodeId() == firstSeriesEpisode.id) {
+                int pct = resumeItem.getProgressPercent();
+                btnPlay.setText("Continuar " + formatEpisodeLabel(firstSeriesEpisode) + " (" + pct + "%)");
+            } else {
+                btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
+            }
             return;
         }
 
@@ -410,9 +478,13 @@ public class DetalleActivity extends AppCompatActivity {
         }
 
         btnPlay.setEnabled(true);
-        btnPlay.setText("Reproducir");
+        if (resumePositionMs > 0 && resumeItem != null) {
+            int pct = resumeItem.getProgressPercent();
+            btnPlay.setText("Continuar (" + pct + "%)");
+        } else {
+            btnPlay.setText("Reproducir");
+        }
 
-        // Warm the first URL in the background so the first playback starts faster.
         triggerPlaybackPrefetch();
     }
 
@@ -440,7 +512,6 @@ public class DetalleActivity extends AppCompatActivity {
             setupTvFocusStates();
         }
 
-        // BotÃ³n reproducir
         if (btnPlay != null) {
             btnPlay.setOnClickListener(v -> {
                 if (isSeries) {
@@ -451,7 +522,9 @@ public class DetalleActivity extends AppCompatActivity {
                     if (!playUrls.isEmpty()) {
                         String playTitle = mediaItem.getTitulo() + " - T1:E1";
                         captureEpisodeNavigationState();
-                        playerLauncher.launch(PlayerContenidoActivity.createIntent(this, playUrls, playTitle));
+                        Intent intent = PlayerContenidoActivity.createIntent(this, playUrls, playTitle);
+                        addResumeExtras(intent);
+                        playerLauncher.launch(intent);
                         return;
                     }
                     Toast.makeText(this, "No hay episodios disponibles", Toast.LENGTH_SHORT).show();
@@ -461,9 +534,11 @@ public class DetalleActivity extends AppCompatActivity {
                 if (!playUrls.isEmpty()) {
                     String playTitle = mediaItem.getTitulo();
                     captureEpisodeNavigationState();
-                    playerLauncher.launch(PlayerContenidoActivity.createIntent(this, playUrls, playTitle));
+                    Intent intent = PlayerContenidoActivity.createIntent(this, playUrls, playTitle);
+                    addResumeExtras(intent);
+                    playerLauncher.launch(intent);
                 } else {
-                    Toast.makeText(this, "No se pudo obtener la URL de reproducciÃ³n", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "No se pudo obtener la URL de reproducci\u00f3n", Toast.LENGTH_SHORT).show();
                 }
             });
         }
@@ -471,6 +546,11 @@ public class DetalleActivity extends AppCompatActivity {
         // BotÃ³n Mi Lista
         if (btnMyList != null) {
             btnMyList.setOnClickListener(v -> toggleMyList());
+        }
+
+        // BotÃ³n favorito (corazÃ³n)
+        if (btnFavorite != null) {
+            btnFavorite.setOnClickListener(v -> toggleMyList());
         }
 
         // Expandir sinopsis (mobile)
@@ -573,6 +653,9 @@ public class DetalleActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         PlaybackCacheHelper.cancelPreload();
+        if (userDataListener != null) {
+            UserDataManager.getInstance(this).removeDataChangeListener(userDataListener);
+        }
         super.onDestroy();
     }
 
@@ -659,9 +742,60 @@ public class DetalleActivity extends AppCompatActivity {
         Toast.makeText(this, "Selector de temporada - PrÃ³ximamente", Toast.LENGTH_SHORT).show();
     }
 
+    private void updateFavoriteButtonState() {
+        if (btnFavorite == null) return;
+        String favId = buildFavoriteId();
+        UserDataManager udm = UserDataManager.getInstance(this);
+        isFavorite = udm.isFavorite(favId);
+        updateFavoriteUi();
+    }
+
+    private void registerUserDataListener() {
+        UserDataManager udm = UserDataManager.getInstance(this);
+        userDataListener = new UserDataManager.DataChangeListener() {
+            @Override
+            public void onFavoritesChanged(List<FavoriteItem> favorites) {
+                runOnUiThread(() -> updateFavoriteButtonState());
+            }
+
+            @Override
+            public void onHistoryChanged(List<WatchedHistoryItem> history) {}
+
+            @Override
+            public void onSettingsChanged(UserSettings settings) {}
+        };
+        udm.addDataChangeListener(userDataListener);
+    }
+
+    private void updateFavoriteUi() {
+        btnMyList.setText(isFavorite ? "â¤ï¸ Mi Lista" : "â¡ Mi Lista");
+        if (btnFavorite == null) return;
+        if (btnFavorite instanceof ImageView) {
+            ((ImageView) btnFavorite).setImageResource(
+                isFavorite ? android.R.drawable.btn_star_big_on : android.R.drawable.btn_star_big_off);
+        } else if (btnFavorite instanceof Button) {
+            ((Button) btnFavorite).setText(isFavorite ? "â¤ï¸" : "â¡");
+        }
+    }
+
+    private String buildFavoriteId() {
+        if (isSeries) {
+            return "tv_" + mediaItem.getPostId();
+        }
+        return "post_" + mediaItem.getPostId();
+    }
+
     private void toggleMyList() {
-        // TODO: implementar guardado en lista local
-        Toast.makeText(this, "Agregado a Mi Lista", Toast.LENGTH_SHORT).show();
+        String favId = buildFavoriteId();
+        UserDataManager udm = UserDataManager.getInstance(this);
+        if (isFavorite) {
+            udm.removeFromFavorites(favId);
+            isFavorite = false;
+        } else {
+            udm.addToFavorites(favId, mediaItem.getTitulo(), mediaItem.getImagen(), mediaItem.getMediaType());
+            isFavorite = true;
+        }
+        updateFavoriteUi();
     }
 
     private boolean isSeriesType(String mediaType) {
