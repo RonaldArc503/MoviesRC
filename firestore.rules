@@ -1,0 +1,18 @@
+rules_version = '2';
+
+// Desplegar en Firebase Console:
+//   1. Ir a Firebase Console -> Proyecto -> Firestore Database -> Rules
+//   2. Pegar este contenido y pulsar "Publicar".
+// Cada usuario solo puede leer/escribir su propio documento users/{uid},
+// de modo que favoritos, historial y "Continuar Viendo" quedan aislados por usuario.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

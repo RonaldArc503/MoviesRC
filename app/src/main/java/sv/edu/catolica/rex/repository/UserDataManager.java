@@ -1,6 +1,8 @@
 package sv.edu.catolica.rex.repository;
 
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
@@ -17,7 +19,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.models.FavoriteItem;
@@ -43,11 +48,19 @@ public class UserDataManager {
     private boolean restoreInProgress = false;
     private boolean restoreComplete = false;
 
-    // Local caches
-    private final List<FavoriteItem> favoritesCache = new ArrayList<>();
-    private final List<WatchedHistoryItem> historyCache = new ArrayList<>();
-    private final Map<String, PersonalList> listsCache = new HashMap<>();
-    private UserSettings settingsCache = new UserSettings();
+    // Local caches. Volátiles: se reasignan como una nueva instancia desde el
+    // hilo de fondo del listener, de modo que la UI (hilo principal) siempre
+    // lee una referencia consistente sin ConcurrentModificationException.
+    private volatile List<FavoriteItem> favoritesCache = new ArrayList<>();
+    private volatile List<WatchedHistoryItem> historyCache = new ArrayList<>();
+    private volatile Map<String, PersonalList> listsCache = new HashMap<>();
+    private volatile UserSettings settingsCache = new UserSettings();
+
+    private final ExecutorService syncExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ConcurrentHashMap<String, Long> lastSyncTimestamps = new ConcurrentHashMap<>();
+    private static final long SYNC_THROTTLE_MS = 30_000L;
+    private final AtomicBoolean isLocalSyncInProgress = new AtomicBoolean(false);
 
     public interface RestoreCallback {
         void onRestoreComplete(boolean fromFirestore);
@@ -76,6 +89,30 @@ public class UserDataManager {
             instance = new UserDataManager(context);
         }
         return instance;
+    }
+
+    /**
+     * Reinicia el manager al cerrar sesión: libera el listener y el executor,
+     * descarta las cachés del usuario anterior y limpia el almacenamiento local
+     * para que el siguiente usuario arranque sin datos ajenos.
+     */
+    public static synchronized void reset(Context context) {
+        if (instance != null) {
+            instance.cleanup();
+            instance = null;
+        }
+        if (context != null) {
+            try {
+                ContinueWatchingStore.clearForCurrentUser(context);
+            } catch (Exception ignored) {}
+            try {
+                SyncQueueManager.getInstance(context).clear();
+            } catch (Exception ignored) {}
+            try {
+                context.getSharedPreferences("user_metadata", Context.MODE_PRIVATE)
+                        .edit().clear().apply();
+            } catch (Exception ignored) {}
+        }
     }
 
     public void addDataChangeListener(DataChangeListener listener) {
@@ -181,21 +218,16 @@ public class UserDataManager {
 
     private void applyRemoteData(UserData remote) {
         if (remote.getContinueWatching() != null) {
-            for (ContinueWatchingItem item : remote.getContinueWatching()) {
-                cwStore.save(appContext, item);
-            }
+            cwStore.upsertAll(appContext, remote.getContinueWatching());
         }
         if (remote.getFavorites() != null) {
-            favoritesCache.clear();
-            favoritesCache.addAll(remote.getFavorites());
+            favoritesCache = new ArrayList<>(remote.getFavorites());
         }
         if (remote.getHistory() != null) {
-            historyCache.clear();
-            historyCache.addAll(remote.getHistory());
+            historyCache = new ArrayList<>(remote.getHistory());
         }
         if (remote.getPersonalLists() != null) {
-            listsCache.clear();
-            listsCache.putAll(remote.getPersonalLists());
+            listsCache = new HashMap<>(remote.getPersonalLists());
         }
         if (remote.getSettings() != null) {
             settingsCache = remote.getSettings();
@@ -254,7 +286,9 @@ public class UserDataManager {
 
     private void processRemoteUpdate(UserData remote) {
         resolveAndApply(remote);
-        processPendingQueue();
+        if (!isLocalSyncInProgress.get()) {
+            syncExecutor.execute(this::processPendingQueue);
+        }
     }
 
     private void resolveAndApply(UserData remote) {
@@ -269,9 +303,33 @@ public class UserDataManager {
 
     public void onLocalDataChanged(String uid, String type, Object payload) {
         syncQueue.enqueue(new SyncOperation(type, payload));
-        if (restoreComplete) {
-            syncImmediately(uid, type, payload);
+        if (restoreComplete && shouldSyncNow(type, payload)) {
+            String uidCopy = uid;
+            syncExecutor.execute(() -> {
+                isLocalSyncInProgress.set(true);
+                try {
+                    syncImmediately(uidCopy, type, payload);
+                } finally {
+                    isLocalSyncInProgress.set(false);
+                }
+            });
         }
+    }
+
+    private boolean shouldSyncNow(String type, Object payload) {
+        if (!SyncOperation.TYPE_SAVE_CONTINUE_WATCHING.equals(type)) return true;
+        if (payload instanceof ContinueWatchingItem) {
+            String contentId = ((ContinueWatchingItem) payload).getContentId();
+            if (contentId != null) {
+                Long lastSync = lastSyncTimestamps.get(contentId);
+                long now = System.currentTimeMillis();
+                if (lastSync != null && (now - lastSync) < SYNC_THROTTLE_MS) {
+                    return false;
+                }
+                lastSyncTimestamps.put(contentId, now);
+            }
+        }
+        return true;
     }
 
     private void syncImmediately(String uid, String type, Object payload) {
@@ -364,7 +422,7 @@ public class UserDataManager {
     }
 
     public void processPendingOnReconnect() {
-        processPendingQueue();
+        syncExecutor.execute(this::processPendingQueue);
     }
 
     public void addToFavorites(String contentId, String title, String imageUrl, String mediaType) {
@@ -374,7 +432,9 @@ public class UserDataManager {
         if (isFavorite(contentId)) return;
 
         FavoriteItem item = new FavoriteItem(contentId, title, imageUrl, mediaType);
-        favoritesCache.add(item);
+        List<FavoriteItem> updated = new ArrayList<>(favoritesCache);
+        updated.add(item);
+        favoritesCache = updated;
         notifyListeners();
 
         onLocalDataChanged(user.getUid(), SyncOperation.TYPE_ADD_FAVORITE, item);
@@ -384,7 +444,9 @@ public class UserDataManager {
         FirebaseUser user = firebaseAuth.getCurrentUser();
         if (user == null) return;
 
-        favoritesCache.removeIf(f -> contentId.equals(f.getContentId()));
+        List<FavoriteItem> updated = new ArrayList<>(favoritesCache);
+        updated.removeIf(f -> contentId.equals(f.getContentId()));
+        favoritesCache = updated;
         notifyListeners();
 
         onLocalDataChanged(user.getUid(), SyncOperation.TYPE_REMOVE_FAVORITE, contentId);
@@ -395,10 +457,12 @@ public class UserDataManager {
         if (user == null) return;
 
         WatchedHistoryItem item = new WatchedHistoryItem(contentId, title, imageUrl, mediaType);
-        historyCache.add(0, item);
-        if (historyCache.size() > 200) {
-            historyCache.remove(historyCache.size() - 1);
+        List<WatchedHistoryItem> updated = new ArrayList<>(historyCache);
+        updated.add(0, item);
+        if (updated.size() > 200) {
+            updated = new ArrayList<>(updated.subList(0, 200));
         }
+        historyCache = updated;
         notifyListeners();
 
         onLocalDataChanged(user.getUid(), SyncOperation.TYPE_ADD_HISTORY, item);
@@ -415,6 +479,10 @@ public class UserDataManager {
     }
 
     private void notifyListeners() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(this::notifyListeners);
+            return;
+        }
         for (DataChangeListener l : dataListeners) {
             l.onFavoritesChanged(new ArrayList<>(favoritesCache));
             l.onHistoryChanged(new ArrayList<>(historyCache));
@@ -439,5 +507,6 @@ public class UserDataManager {
             snapshotListener.remove();
             snapshotListener = null;
         }
+        syncExecutor.shutdown();
     }
 }

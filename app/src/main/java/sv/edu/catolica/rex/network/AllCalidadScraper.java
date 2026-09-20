@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.zip.GZIPInputStream;
 import sv.edu.catolica.rex.models.MediaItem;
+import sv.edu.catolica.rex.source.SourceMatcher;
 
 public class AllCalidadScraper {
 
@@ -46,7 +47,7 @@ public class AllCalidadScraper {
 
     public static class ContentItem {
         public int    id;
-        public String title, year, overview, posterUrl, backdropUrl,
+        public String title, originalTitle, year, overview, posterUrl, backdropUrl,
                 detailUrl, rating, type;
     }
 
@@ -122,37 +123,165 @@ public class AllCalidadScraper {
     }
 
     /**
-     * Busca un contenido en AllCalidad por título y año.
-     * Útil para items provenientes de TMDB que no tienen postId.
-     * Devuelve el primer ContentItem que coincida (o null si no encuentra).
+     * Busca un contenido en AllCalidad por título y año con matching robusto a
+     * traducciones: usa `original_title` (inglés) cuando existe, compara por año
+     * y por solapamiento de palabras clave (no Levenshtein, que falla con títulos
+     * traducidos). Útil para items de TMDB que no tienen postId.
+     * Devuelve null si no hay un candidato fiable (para no reproducir contenido
+     * equivocado).
      */
     public static ContentItem findByTitleAndYear(String title, String year, String mediaType) {
         if (title == null || title.trim().isEmpty()) return null;
         try {
-            String safeType = "movies";
-            if (mediaType != null) {
-                String lower = mediaType.trim().toLowerCase(Locale.ROOT);
-                if ("tvshows".equals(lower) || "animes".equals(lower) || "series".equals(lower) || "tv".equals(lower)) {
-                    safeType = "tvshows";
-                }
+            boolean hasYear = year != null && year.matches("\\d{4}");
+            String cleanTitle = stripYear(title);
+
+            // 1) Buscar por palabra clave significativa (el buscador no maneja
+            //    títulos completos en inglés traducidos).
+            String keyword = firstSignificantWord(cleanTitle);
+            List<ContentItem> results = new ArrayList<>();
+            addUnique(search(keyword != null ? keyword : cleanTitle, 1), results);
+
+            ContentItem best = findBestMatch(results, cleanTitle, hasYear, year);
+
+            // 2) Fallback: si no hubo match fiable, buscar con el título completo.
+            if (best == null && keyword != null && !keyword.equalsIgnoreCase(cleanTitle)) {
+                addUnique(search(cleanTitle, 1), results);
+                best = findBestMatch(results, cleanTitle, hasYear, year);
             }
-            List<ContentItem> results = search(title, 1);
-            if (results == null || results.isEmpty()) return null;
-            // Preferir match exacto de año si se proporciona
-            if (year != null && year.matches("\\d{4}")) {
-                for (ContentItem item : results) {
-                    if (item.year != null && item.year.equals(year)) {
-                        return item;
-                    }
-                }
-            }
-            // Fallback: devolver el primer resultado
-            return results.get(0);
+
+            return best;
         } catch (Exception e) {
             Log.w(TAG, "findByTitleAndYear falló para " + title + ": " + e.getMessage());
             return null;
         }
     }
+
+    private static ContentItem findBestMatch(List<ContentItem> results, String cleanTitle,
+                                             boolean hasYear, String year) {
+        if (results == null || results.isEmpty()) return null;
+        ContentItem best = null;
+        int bestRank = 0;
+        for (ContentItem item : results) {
+            if (item == null) continue;
+            int overlap = wordOverlap(cleanTitle, item);
+            boolean yearMatch = hasYear && matchesYear(item, year);
+            boolean accept = overlap >= 70 || (yearMatch && overlap >= 40);
+            if (accept) {
+                int rank = overlap + (yearMatch ? 20 : 0);
+                if (rank > bestRank) {
+                    bestRank = rank;
+                    best = item;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** % de palabras clave del título solicitado presentes en el título/original del item. */
+    private static int wordOverlap(String query, ContentItem item) {
+        if (item == null) return 0;
+        String q = SourceMatcher.normalize(query);
+        if (q.isEmpty()) return 0;
+
+        // Compara contra el título en español Y el original (inglés) y toma el
+        // mejor: así "Linternas" matchea con "Linternas (2026)" aunque el
+        // original_title sea "Lanterns", y viceversa.
+        int best = 0;
+        if (item.title != null && !item.title.trim().isEmpty()) {
+            best = Math.max(best, overlapOf(q, SourceMatcher.normalize(item.title)));
+        }
+        if (item.originalTitle != null && !item.originalTitle.trim().isEmpty()) {
+            best = Math.max(best, overlapOf(q, SourceMatcher.normalize(item.originalTitle)));
+        }
+        return best;
+    }
+
+    private static int overlapOf(String q, String t) {
+        if (q.isEmpty() || t.isEmpty()) return 0;
+        if (q.equals(t) || t.contains(q) || q.contains(t)) return 100;
+
+        String[] qw = q.split("\\s+");
+        int meaningful = 0;
+        int hit = 0;
+        for (String w : qw) {
+            if (w.length() < 3 || STOP_WORDS.contains(w)) continue;
+            meaningful++;
+            if (t.contains(w)) {
+                hit++;
+                continue;
+            }
+            boolean prefix = false;
+            for (String tw : t.split("\\s+")) {
+                if (tw.startsWith(w) || w.startsWith(tw)) {
+                    prefix = true;
+                    break;
+                }
+            }
+            if (prefix) hit++;
+        }
+        if (meaningful == 0) return 0;
+        return hit * 100 / meaningful;
+    }
+
+    private static boolean matchesYear(ContentItem item, String year) {
+        if (item == null || year == null) return false;
+        if (item.year != null && item.year.equals(year)) return true;
+        if (item.title != null && item.title.contains(year)) return true;
+        if (item.originalTitle != null && item.originalTitle.contains(year)) return true;
+        return false;
+    }
+
+    private static String stripYear(String title) {
+        if (title == null) return "";
+        String t = title.trim();
+        t = t.replaceAll("\\s*\\(\\d{4}\\)$", "").replaceAll("\\s+\\d{4}$", "").trim();
+        return t.isEmpty() ? title.trim() : t;
+    }
+
+    /** Primera palabra significativa (≥4 letras, que no sea stopword). */
+    private static String firstSignificantWord(String title) {
+        if (title == null) return null;
+        String norm = SourceMatcher.normalize(title);
+        if (norm.isEmpty()) return null;
+        String[] words = norm.split("\\s+");
+        for (String w : words) {
+            if (w.length() >= 4 && !STOP_WORDS.contains(w)) return w;
+        }
+        return words[0];
+    }
+
+    private static void addUnique(List<ContentItem> src, List<ContentItem> dst) {
+        if (src == null) return;
+        for (ContentItem item : src) {
+            if (item == null) continue;
+            boolean dup = false;
+            for (ContentItem d : dst) {
+                if (d != null && item.id > 0 && d.id == item.id) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) dst.add(item);
+        }
+    }
+
+    /** Decodifica entidades HTML (&amp; → &) presentes en los campos del sitio. */
+    private static String htmlDecode(String raw) {
+        if (raw == null) return null;
+        if (raw.indexOf('&') < 0) return raw;
+        try {
+            return org.jsoup.parser.Parser.unescapeEntities(raw, false);
+        } catch (Exception e) {
+            return raw;
+        }
+    }
+
+    private static final java.util.Set<String> STOP_WORDS = java.util.Collections.unmodifiableSet(
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "the", "and", "of", "for", "with", "from", "una", "uno", "un",
+                    "del", "que", "los", "las", "por", "para", "como", "sus",
+                    "con", "de", "la", "el", "en", "y", "a", "an")));
 
     // ─────────────────────────────────────────────────────────────────────────
     // RELACIONADOS / HIT
@@ -238,7 +367,7 @@ public class AllCalidadScraper {
         PlayerData playerData = new PlayerData();
         try {
             JSONObject root = new JSONObject(
-                    httpGet(API_BASE + "/player?post_id=" + postId + "&_any=1"));
+                    httpGet(API_BASE + "/player?post_id=" + postId));
             if (!root.optBoolean("error", true)) {
                 parsePlayerData(playerData, root.opt("data"));
             }
@@ -270,9 +399,10 @@ public class AllCalidadScraper {
                 for (int i = 0; i < posts.length(); i++) {
                     JSONObject post = posts.getJSONObject(i);
                     ContentItem item = new ContentItem();
-                    item.id       = post.optInt("_id", post.optInt("ID", 0));
-                    item.title    = post.optString("title");
-                    item.overview = post.optString("overview");
+                    item.id       = optIntFlexible(post, "_id", "ID", "post_id", "id");
+                    item.title    = htmlDecode(post.optString("title"));
+                    item.originalTitle = htmlDecode(post.optString("original_title"));
+                    item.overview = htmlDecode(post.optString("overview"));
                     item.rating   = post.optString("rating");
                     item.type     = normalizePostType(
                             firstNonEmpty(post.optString("type"), post.optString("post_type")));
@@ -288,7 +418,7 @@ public class AllCalidadScraper {
                     if (item.posterUrl == null || item.posterUrl.isEmpty())
                         item.posterUrl = normalizeUrl(post.optString("poster"));
                     if (item.overview == null || item.overview.isEmpty())
-                        item.overview = post.optString("description");
+                        item.overview = htmlDecode(post.optString("description"));
 
                     String slug = post.optString("slug");
                     if (slug != null && !slug.isEmpty()) {
@@ -411,7 +541,7 @@ public class AllCalidadScraper {
 
     private static Episode parseEpisode(JSONObject obj, int fallbackSeason, int fallbackEp) {
         Episode e = new Episode();
-        e.id            = obj.optInt("post_id", obj.optInt("_id", obj.optInt("ID", 0)));
+        e.id            = optIntFlexible(obj, "post_id", "_id", "ID", "id");
         e.seasonNumber  = obj.optInt("season_number", obj.optInt("season", fallbackSeason));
         e.episodeNumber = obj.optInt("episode_number", obj.optInt("episode", obj.optInt("number", fallbackEp)));
         e.title         = firstNonEmpty(obj.optString("title"), obj.optString("name"), "Episodio " + e.episodeNumber);
@@ -419,6 +549,30 @@ public class AllCalidadScraper {
         e.stillUrl      = normalizeUrl(firstNonEmpty(obj.optString("still_path"), obj.optString("still")));
         if (e.id <= 0) return null;
         return e;
+    }
+
+    private static int optIntFlexible(JSONObject obj, String... keys) {
+        if (obj == null || keys == null) return 0;
+        for (String key : keys) {
+            if (key == null) continue;
+            int parsed = toInt(obj.opt(key));
+            if (parsed > 0) return parsed;
+        }
+        return 0;
+    }
+
+    private static int toInt(Object value) {
+        if (value == null) return 0;
+        if (value instanceof Number) return ((Number) value).intValue();
+        String s = value.toString().trim();
+        if (s.isEmpty()) return 0;
+        s = s.replaceAll("[^0-9]", "");
+        if (s.isEmpty()) return 0;
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static List<Season> sortSeasons(List<Season> seasons) {

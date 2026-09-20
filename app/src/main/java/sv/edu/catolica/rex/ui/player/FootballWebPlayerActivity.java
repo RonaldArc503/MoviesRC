@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -18,13 +19,26 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.mediarouter.app.MediaRouteButton;
+
+import com.google.android.gms.cast.MediaInfo;
+import com.google.android.gms.cast.MediaLoadRequestData;
+import com.google.android.gms.cast.MediaMetadata;
+import com.google.android.gms.cast.framework.CastSession;
+import com.google.android.gms.cast.framework.CastButtonFactory;
+import com.google.android.gms.cast.framework.CastContext;
+import com.google.android.gms.cast.framework.CastState;
+import com.google.android.gms.cast.framework.CastStateListener;
+import com.google.android.gms.cast.framework.SessionManagerListener;
 
 import android.util.Log;
 
@@ -32,6 +46,8 @@ import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
+
+import sv.edu.catolica.rex.R;
 
 public class FootballWebPlayerActivity extends AppCompatActivity {
 
@@ -49,11 +65,20 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
     private ProgressBar progressBar;
     private FrameLayout root;
     private View customView;
+    private ImageButton btnCast;
+    private MediaRouteButton mediaRouteButton;
+    private CastContext castContext;
+    private CastStateListener castStateListener;
+    private SessionManagerListener<CastSession> castSessionListener;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private int autoStartGeneration = 0;
     private boolean routedToNativePlayer = false;
     private boolean allowDirectMediaRoute = true;
+    private String currentCastMediaUrl;
+    private String currentCastContentType;
+    private String lastLoadedCastMediaUrl;
+    private boolean drmContentDetected;
 
     public static void start(Context context, String embedUrl, String referer, String title) {
         start(context, embedUrl, referer, title, true);
@@ -116,7 +141,220 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         );
         root.addView(progressBar, progressParams);
 
+        setupCastOverlay();
         setContentView(root);
+    }
+
+    private void setupCastOverlay() {
+        mediaRouteButton = new MediaRouteButton(this);
+        mediaRouteButton.setVisibility(View.GONE);
+        root.addView(mediaRouteButton, new FrameLayout.LayoutParams(0, 0));
+
+        btnCast = new ImageButton(this);
+        btnCast.setBackgroundResource(R.drawable.bg_player_icon_button);
+        btnCast.setImageResource(R.drawable.ic_tv);
+        btnCast.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
+        btnCast.setPadding(dp(12), dp(12), dp(12), dp(12));
+        btnCast.setAlpha(0.45f);
+        btnCast.setEnabled(false);
+        btnCast.setContentDescription(null);
+
+        FrameLayout.LayoutParams castParams = new FrameLayout.LayoutParams(dp(48), dp(48));
+        castParams.gravity = Gravity.TOP | Gravity.END;
+        castParams.setMargins(0, dp(18), dp(18), 0);
+        root.addView(btnCast, castParams);
+
+        btnCast.setOnClickListener(v -> {
+            if (mediaRouteButton != null && btnCast.isEnabled()) {
+                mediaRouteButton.showDialog();
+            } else {
+                Toast.makeText(this, "Google Cast no esta disponible", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        try {
+            CastButtonFactory.setUpMediaRouteButton(getApplicationContext(), mediaRouteButton);
+            castContext = CastContext.getSharedInstance(this);
+            castStateListener = state -> updateCastOverlayState(state);
+            castContext.addCastStateListener(castStateListener);
+            castSessionListener = new SessionManagerListener<CastSession>() {
+                @Override
+                public void onSessionStarting(CastSession session) {
+                }
+
+                @Override
+                public void onSessionStarted(CastSession session, String sessionId) {
+                    castCurrentMediaIfAvailable(session);
+                }
+
+                @Override
+                public void onSessionStartFailed(CastSession session, int error) {
+                    resumeLocalWebPlayback();
+                }
+
+                @Override
+                public void onSessionEnding(CastSession session) {
+                }
+
+                @Override
+                public void onSessionEnded(CastSession session, int error) {
+                    lastLoadedCastMediaUrl = null;
+                    resumeLocalWebPlayback();
+                }
+
+                @Override
+                public void onSessionResuming(CastSession session, String sessionId) {
+                }
+
+                @Override
+                public void onSessionResumed(CastSession session, boolean wasSuspended) {
+                    castCurrentMediaIfAvailable(session);
+                }
+
+                @Override
+                public void onSessionResumeFailed(CastSession session, int error) {
+                    resumeLocalWebPlayback();
+                }
+
+                @Override
+                public void onSessionSuspended(CastSession session, int reason) {
+                }
+            };
+            castContext.getSessionManager().addSessionManagerListener(castSessionListener, CastSession.class);
+            updateCastOverlayState(castContext.getCastState());
+        } catch (Exception e) {
+            updateCastOverlayState(CastState.NO_DEVICES_AVAILABLE);
+        }
+    }
+
+    private void updateCastOverlayState(int state) {
+        if (btnCast == null) return;
+        boolean connected = state == CastState.CONNECTED;
+        boolean available = state != CastState.NO_DEVICES_AVAILABLE;
+        btnCast.setVisibility(View.VISIBLE);
+        btnCast.setEnabled(available);
+        btnCast.setAlpha(available ? 1f : 0.45f);
+        btnCast.setImageResource(connected ? R.drawable.ic_cast_connected : R.drawable.ic_tv);
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void rememberCastCandidate(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return;
+        }
+        String trimmed = url.trim();
+        String lc = trimmed.toLowerCase(Locale.ROOT);
+
+        if (lc.contains("/dash/enc/") || lc.contains("/cenc") || lc.contains("cenc_") || lc.contains("cenc.mpd")) {
+            drmContentDetected = true;
+            return;
+        }
+
+        int queryIndex = lc.indexOf('?');
+        String path = queryIndex >= 0 ? lc.substring(0, queryIndex) : lc;
+
+        String contentType;
+        if (path.endsWith(".m3u8")) {
+            contentType = "application/x-mpegURL";
+        } else if (path.endsWith(".mpd")) {
+            contentType = "application/dash+xml";
+        } else if (path.endsWith(".mp4") && !lc.contains("cenc_") && !lc.contains("_init.mp4")) {
+            contentType = "video/mp4";
+        } else {
+            return;
+        }
+
+        currentCastMediaUrl = trimmed;
+        currentCastContentType = contentType;
+        Log.d(TAG, "Stream candidato para Cast: " + trimmed);
+
+        if (castContext != null) {
+            mainHandler.post(() -> {
+                try {
+                    CastSession session = castContext.getSessionManager().getCurrentCastSession();
+                    if (session != null && session.isConnected()) {
+                        castCurrentMediaIfAvailable(session);
+                    }
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
+    private void castCurrentMediaIfAvailable(CastSession session) {
+        if (session == null || !session.isConnected()) {
+            return;
+        }
+        if (currentCastMediaUrl == null || currentCastMediaUrl.trim().isEmpty()) {
+            if (drmContentDetected) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Transmitir a TV")
+                        .setMessage("Este stream usa protección DRM y no puede enviarse directamente al Chromecast.\n\n" +
+                                "Puedes duplicar la pantalla de tu teléfono en el TV:")
+                        .setPositiveButton("Duplicar pantalla", (d, w) -> {
+                            try {
+                                startActivity(new Intent(Settings.ACTION_CAST_SETTINGS));
+                            } catch (Exception e) {
+                                Toast.makeText(this, "Tu dispositivo no soporta esta función", Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton("Cerrar", null)
+                        .show();
+            } else {
+                Toast.makeText(this, "Esperando stream para transmitir", Toast.LENGTH_SHORT).show();
+            }
+            Log.d(TAG, "Cast conectado, pero no hay stream detectable para transmitir");
+            return;
+        }
+        if (currentCastMediaUrl.equals(lastLoadedCastMediaUrl)) {
+            pauseLocalWebPlaybackForCast();
+            return;
+        }
+        if (session.getRemoteMediaClient() == null) {
+            Log.d(TAG, "Cast conectado sin RemoteMediaClient disponible");
+            return;
+        }
+
+        MediaMetadata metadata = new MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE);
+        metadata.putString(MediaMetadata.KEY_TITLE,
+                getTitle() == null ? "Futbol en vivo" : getTitle().toString());
+
+        MediaInfo mediaInfo = new MediaInfo.Builder(currentCastMediaUrl)
+                .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
+                .setContentType(currentCastContentType == null ? "application/dash+xml" : currentCastContentType)
+                .setMetadata(metadata)
+                .build();
+
+        MediaLoadRequestData request = new MediaLoadRequestData.Builder()
+                .setMediaInfo(mediaInfo)
+                .setAutoplay(true)
+                .build();
+
+        lastLoadedCastMediaUrl = currentCastMediaUrl;
+        Log.d(TAG, "Enviando stream a Cast: " + currentCastMediaUrl);
+        session.getRemoteMediaClient().load(request);
+        pauseLocalWebPlaybackForCast();
+        Toast.makeText(this, "Transmitiendo a TV", Toast.LENGTH_SHORT).show();
+    }
+
+    private void pauseLocalWebPlaybackForCast() {
+        if (webView == null) {
+            return;
+        }
+        webView.evaluateJavascript(
+                "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();}catch(e){}});}catch(e){}try{if(window.jwplayer){var nodes=document.querySelectorAll('[id^=botr_],.jwplayer,[id*=jwplayer]');for(var i=0;i<nodes.length;i++){try{var id=nodes[i].id;if(id){var p=window.jwplayer(id);if(p&&p.pause)p.pause(true);}}catch(e){}}}}catch(e){}})();",
+                null
+        );
+    }
+
+    private void resumeLocalWebPlayback() {
+        if (webView == null) {
+            return;
+        }
+        webView.onResume();
+        autoStartVideo(webView);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -146,6 +384,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                rememberCastCandidate(url);
                 if (allowDirectMediaRoute && isDirectMediaUrl(url)) {
                     routeDirectMediaToExo(url);
                     return true;
@@ -159,6 +398,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                rememberCastCandidate(url);
                 if (allowDirectMediaRoute && isDirectMediaUrl(url)) {
                     mainHandler.post(() -> routeDirectMediaToExo(url));
                     return new WebResourceResponse(
@@ -198,6 +438,7 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                 ));
+                bringCastOverlayToFront();
                 webView.setVisibility(View.GONE);
                 enterImmersiveMode();
             }
@@ -210,6 +451,9 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
     }
 
     private void loadEmbed(String embedUrl) {
+        drmContentDetected = false;
+        currentCastMediaUrl = null;
+        lastLoadedCastMediaUrl = null;
         progressBar.setVisibility(View.VISIBLE);
         HashMap<String, String> headers = new HashMap<>();
         String referer = getIntent().getStringExtra(EXTRA_REFERER);
@@ -412,6 +656,15 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         enterImmersiveMode();
     }
 
+    private void bringCastOverlayToFront() {
+        if (mediaRouteButton != null) {
+            mediaRouteButton.bringToFront();
+        }
+        if (btnCast != null) {
+            btnCast.bringToFront();
+        }
+    }
+
     @Override
     public void onBackPressed() {
         if (customView != null) {
@@ -451,6 +704,14 @@ public class FootballWebPlayerActivity extends AppCompatActivity {
         autoStartGeneration++;
         mainHandler.removeCallbacksAndMessages(null);
         hideCustomView();
+        if (castContext != null && castStateListener != null) {
+            castContext.removeCastStateListener(castStateListener);
+            castStateListener = null;
+        }
+        if (castContext != null && castSessionListener != null) {
+            castContext.getSessionManager().removeSessionManagerListener(castSessionListener, CastSession.class);
+            castSessionListener = null;
+        }
         if (webView != null) {
             stopFootballPlayback();
             destroyWebView();

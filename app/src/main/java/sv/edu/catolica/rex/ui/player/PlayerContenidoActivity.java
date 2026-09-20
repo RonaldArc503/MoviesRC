@@ -12,6 +12,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
 import android.widget.SeekBar;
@@ -36,6 +37,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONException;
 import org.json.JSONObject;
 import sv.edu.catolica.rex.R;
@@ -61,8 +64,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private static final long SERVER_TIMEOUT_MS = 12000L;
     private static final int MAX_RETRIES_PER_SERVER = 1;
     private static final long RETRY_DELAY_MS = 700L;
-    private static final long PLAYBACK_POLL_INTERVAL_MS = 1000L;
-    private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 30d;
+    private static final long PLAYBACK_POLL_INTERVAL_MS = 2000L;
+    private static final long PLAYBACK_POLL_INTERVAL_SLOW_MS = 5000L;
+    private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 300d;
+    private static final boolean SHOW_NEXT_EPISODE_BUTTON = true;
     private static final double NEXT_EPISODE_HIDE_HYSTERESIS_SEC = 12d;
     private static final double AUTO_NEXT_REMAINING_SEC = 1.2d;
     private static final String NEXT_EPISODE_LABEL_BASE = "Siguiente episodio";
@@ -73,7 +78,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private static final String EXTRA_RESUME_POSITION_MS = "resume_position_ms";
     private static final long PLAYBACK_SAVE_INTERVAL_MS = 10000L;
     private static final long SEEK_RETRY_DELAY_MS = 500L;
-    private static final int SEEK_MAX_RETRIES = 10;
+    private static final int SEEK_MAX_RETRIES = 20;
 
     private WebView webView;
     private ProgressBar progressBar;
@@ -97,11 +102,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     private final List<AllCalidadScraper.Season> seasonCache = new ArrayList<>();
     private boolean loadingSeasonData = false;
+    private boolean seasonPreloadAttempted = false;
     private boolean nextButtonVisible = false;
     private boolean isTransitioningToNextEpisode = false;
     private boolean autoNextTriggeredForCurrent = false;
     private boolean resumed = false;
     private boolean isTvDevice = false;
+    private boolean adOverlaysCleaned = false;
     private String lastLoadedEmbedUrl = "";
     private boolean exoSwitchInProgress = false;
     private View customView;
@@ -116,20 +123,28 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private long contentDurationMs = 0;
     private String contentId = "";
     private String imageUrl = "";
+    private boolean disableExoSwitch = false;
+
+    /** Guarda el progreso en un hilo de fondo para no saturar el main thread
+     *  con Gson/SharedPreferences mientras el video se está reproduciendo. */
+    private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor();
 
     // Controls overlay
     private View controlOverlay;
     private View centerControls;
+    private View topBar;
+    private View bottomBar;
+    private ImageButton btnBack;
     private ImageButton btnPlayCenter;
-    private ImageButton btnPlaySmall;
     private ImageButton btnSkipBack;
     private ImageButton btnSkipForward;
-    private ImageButton btnSpeed;
     private SeekBar seekBar;
     private TextView tvCurrentTime;
     private TextView tvDuration;
     private TextView tvTitle;
     private boolean controlsVisible = false;
+    private boolean seekBarDragging = false;
+    private float seekDownX = -1f;
     private long lastVideoDurationMs = 0;
     private long lastVideoTapUpMs = 0L;
     private float lastVideoTapX = -1f;
@@ -143,9 +158,18 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             if (pageLoaded && !isTransitioningToNextEpisode) {
                 inspectPlaybackState();
             }
-            handler.postDelayed(this, PLAYBACK_POLL_INTERVAL_MS);
+            handler.postDelayed(this, currentPollInterval());
         }
     };
+
+    /** Intervalo adaptativo: cuando el video se reproduce con controles ocultos
+     *  se espacia el polling para reducir la presión de JS sobre el renderer. */
+    private long currentPollInterval() {
+        if (pageLoaded && !controlsVisible && lastVideoDurationMs > 0) {
+            return PLAYBACK_POLL_INTERVAL_SLOW_MS;
+        }
+        return PLAYBACK_POLL_INTERVAL_MS;
+    }
 
     private static class NextEpisodeInfo {
         final int episodeId;
@@ -222,6 +246,32 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 episodeId, seasonNumber, episodeNumber));
     }
 
+    /** Intent completo con metadatos + imagen + posición de reanudación.
+     *  Se usa para re-lanzar el player WebView cuando ExoPlayer falla. */
+    public static Intent createFullIntent(
+            Context context,
+            ArrayList<String> urls,
+            String title,
+            String seriesTitle,
+            int seriesPostId,
+            String seriesPostType,
+            int episodeId,
+            int seasonNumber,
+            int episodeNumber,
+            String imageUrl,
+            long resumePositionMs
+    ) {
+        Intent intent = createEpisodeIntent(context, urls, title, seriesTitle, seriesPostId,
+                seriesPostType, episodeId, seasonNumber, episodeNumber);
+        if (imageUrl != null && !imageUrl.isEmpty()) {
+            intent.putExtra(EXTRA_IMAGE_URL, imageUrl);
+        }
+        if (resumePositionMs > 0) {
+            intent.putExtra(EXTRA_RESUME_POSITION_MS, resumePositionMs);
+        }
+        return intent;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -275,12 +325,21 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             return;
         }
 
-        ArrayList<String> directStreamUrls = extractDirectStreamUrls(serverUrls);
-        if (!directStreamUrls.isEmpty()) {
-            PlayerExoActivity.start(this, directStreamUrls, title);
-            setPlaybackResult();
-            finish();
-            return;
+        disableExoSwitch = getIntent().getBooleanExtra("disable_exo_switch", false);
+
+        if (!disableExoSwitch) {
+            ArrayList<String> directStreamUrls = extractDirectStreamUrls(serverUrls);
+            if (!directStreamUrls.isEmpty()) {
+                String embedReferer = originOf(!serverUrls.isEmpty() ? serverUrls.get(0) : null);
+                PlayerExoActivity.start(this, directStreamUrls, title,
+                        contentId, seriesTitle, imageUrl,
+                        seriesPostId, seriesPostType,
+                        currentEpisodeId, currentSeasonNumber, currentEpisodeNumber,
+                        resumePositionMs, null, embedReferer);
+                setPlaybackResult();
+                finish();
+                return;
+            }
         }
 
         setupNextEpisodeButton();
@@ -318,6 +377,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
         }
+        try {
+            settings.setRenderPriority(WebSettings.RenderPriority.HIGH);
+        } catch (Exception ignored) {
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
@@ -330,6 +393,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 pageLoaded = false;
+                adOverlaysCleaned = false;
                 progressBar.setVisibility(View.VISIBLE);
                 showPlaybackStatus("Loading playback...");
                 failoverInProgress = false;
@@ -393,8 +457,6 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
                 applyJwFullscreenFix(url);
                 injectHideVideoControls();
-                handler.postDelayed(PlayerContenidoActivity.this::injectHideVideoControls, 1500);
-                handler.postDelayed(PlayerContenidoActivity.this::injectHideVideoControls, 3000);
 
                 triggerAutoPlayAttempts();
                 startPlaybackMonitor();
@@ -403,6 +465,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                     scheduleTvControlsHide();
                 }
             }
+
+
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
@@ -451,9 +515,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 enterImmersiveMode();
-                // Limpiar overlays de anuncios antes de que el toque llegue al WebView
-                if (pageLoaded) {
+                // Limpiar overlays de anuncios una sola vez por página (evita
+                // inyectar JS pesado en cada toque).
+                if (pageLoaded && !adOverlaysCleaned) {
+                    adOverlaysCleaned = true;
                     removeAdOverlays();
+                    showControls();
+                } else if (pageLoaded) {
                     showControls();
                 }
             }
@@ -516,15 +584,12 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     private void triggerAutoPlayAttempts() {
         handler.removeCallbacks(autoPlayRunnable);
+        // Intentos suaves y espaciados: menos inyecciones de JS = menos presión
+        // sobre el renderer y menos riesgo de interrumpir la reproducción.
         handler.postDelayed(autoPlayRunnable, 150L);
-        handler.postDelayed(autoPlayRunnable, 1200L);
-        handler.postDelayed(autoPlayRunnable, 2800L);
-        handler.postDelayed(autoPlayRunnable, 4500L);
-        handler.postDelayed(autoPlayRunnable, 7000L);
-        handler.postDelayed(autoPlayRunnable, 9500L);
-        handler.postDelayed(autoPlayRunnable, 13000L);
-        handler.postDelayed(autoPlayRunnable, 18000L);
-        handler.postDelayed(autoPlayRunnable, 25000L);
+        handler.postDelayed(autoPlayRunnable, 1500L);
+        handler.postDelayed(autoPlayRunnable, 4000L);
+        handler.postDelayed(autoPlayRunnable, 8000L);
     }
 
     private void requestAutoPlay() {
@@ -600,19 +665,6 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "if(isJwCdn){"
                 + "  try{document.documentElement.style.cssText='margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000;';}catch(e){}"
                 + "  try{document.body.style.cssText='margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000;';}catch(e){}"
-                + "  function pickFromSources(sources){"
-                + "    if(!Array.isArray(sources)||sources.length===0)return '';"
-                + "    var pick='';"
-                + "    for(var i=0;i<sources.length;i++){"
-                + "      var s=sources[i]||{};"
-                + "      var u=(s.file||s.src||'');"
-                + "      if(!u)continue;"
-                + "      var l=String(u).toLowerCase();"
-                + "      if(l.indexOf('.m3u8')!==-1)return String(u);"
-                + "      if(!pick&&(l.indexOf('.mpd')!==-1||l.indexOf('.mp4')!==-1))pick=String(u);"
-                + "    }"
-                + "    return pick;"
-                + "  }"
                 + "  try{"
                 + "    if(window.jwplayer){"
                 + "      var jw=window.jwplayer();"
@@ -620,30 +672,25 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "        try{if(jw.setMute)jw.setMute(false);}catch(e){}"
                 + "        try{if(jw.setVolume)jw.setVolume(100);}catch(e){}"
                 + "        try{if(jw.play)jw.play();}catch(e){}"
-                + "        try{if(jw.setFullscreen)jw.setFullscreen(true);}catch(e){}"
-                + "        var item=(typeof jw.getPlaylistItem==='function')?jw.getPlaylistItem():null;"
-                + "        var direct='';"
-                + "        if(item){"
-                + "          direct=pickFromSources(item.sources);"
-                + "          if(!direct&&item.file)direct=String(item.file);"
+                + "        var jw2=window.jwplayer('vplayer');"
+                + "        if(jw2){"
+                + "          try{if(jw2.setMute)jw2.setMute(false);}catch(e){}"
+                + "          try{if(jw2.setVolume)jw2.setVolume(100);}catch(e){}"
+                + "          try{if(jw2.play)jw2.play();}catch(e){}"
                 + "        }"
-                + "        if(!direct&&typeof jw.getPlaylist==='function'){"
-                + "          var list=jw.getPlaylist();"
-                + "          if(Array.isArray(list)&&list.length>0){"
-                + "            var first=list[0]||{};"
-                + "            direct=pickFromSources(first.sources);"
-                + "            if(!direct&&first.file)direct=String(first.file);"
-                + "          }"
-                + "        }"
-                + "        if(direct)return direct;"
                 + "      }"
                 + "    }"
                 + "  }catch(e){}"
                 + "  var vids=document.querySelectorAll('video');"
                 + "  for(var v=0;v<vids.length;v++){"
-                + "    var src=(vids[v].currentSrc||vids[v].src||'');"
-                + "    if(src)return String(src);"
-                + "    try{if(vids[v].paused){var vp=vids[v].play();if(vp&&vp.catch)vp.catch(function(){});}}catch(e){}"
+                + "    try{"
+                + "      var vid=vids[v];"
+                + "      vid.muted=false;vid.volume=1;"
+                + "      if(vid.paused){"
+                + "        var vp=vid.play();"
+                + "        if(vp&&vp.catch)vp.catch(function(){});"
+                + "      }"
+                + "    }catch(e){}"
                 + "  }"
                 + "  return '';"
                 + "}"
@@ -733,12 +780,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                     .replace("\\/", "/");
 
             if (playbackUrl.isEmpty() || playbackUrl.equals("null")) return;
-            if (isDirectStreamUrl(playbackUrl)) {
-                switchToExoPlayer(playbackUrl);
-                return;
-            }
 
-            // Verificar que es una URL de un host de video conocido
+            // Verificar que es una URL de un host de video conocido (Capa 2)
             boolean isVideoHost = isKnownEmbedVideoHost(playbackUrl);
 
             if (!isVideoHost) return;
@@ -747,21 +790,37 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             if (playbackUrl.equals(lastLoadedEmbedUrl)) return;
             lastLoadedEmbedUrl = playbackUrl;
 
-            // Cargar directamente la Capa 2 en el WebView principal
-            String finalEmbedUrl = playbackUrl;
-            handler.post(() -> {
-                serverUrls.clear();
-                serverUrls.add(finalEmbedUrl);
-                currentServerIndex = 0;
-                pageLoaded = false;
-                Map<String, String> headers = buildPlaybackHeaders(finalEmbedUrl);
-                if (headers.isEmpty()) {
-                    webView.loadUrl(finalEmbedUrl);
-                } else {
-                    webView.loadUrl(finalEmbedUrl, headers);
-                }
-            });
+            // Cargar la Capa 2 solo si no hay un video reproduciéndose (nunca
+            // interrumpir el playback con una recarga del WebView).
+            loadEmbedUrlIfNotPlaying(playbackUrl);
         });
+    }
+
+    /** Carga una URL de embed en el WebView salvo que ya haya video en marcha. */
+    private void loadEmbedUrlIfNotPlaying(final String embedUrl) {
+        if (webView == null || embedUrl == null) return;
+        // Se considera "en reproducción" si el elemento tiene progreso (currentTime>0)
+        // o ya tiene datos suficientes (readyState>=2), para no recargar durante el
+        // arranque de hls.js ni ante breves pausas de buffering.
+        webView.evaluateJavascript(
+            "(function(){try{var m=document.querySelector('video');"
+            + "return !!(m&&(m.currentTime>0||m.readyState>=2));}catch(e){return false}})();",
+            result -> {
+                if ("true".equals(result)) return; // no interrumpir reproducción
+                handler.post(() -> {
+                    if (webView == null || isFinishing() || isDestroyed()) return;
+                    serverUrls.clear();
+                    serverUrls.add(embedUrl);
+                    currentServerIndex = 0;
+                    pageLoaded = false;
+                    Map<String, String> headers = buildPlaybackHeaders(embedUrl);
+                    if (headers.isEmpty()) {
+                        webView.loadUrl(embedUrl);
+                    } else {
+                        webView.loadUrl(embedUrl, headers);
+                    }
+                });
+            });
     }
 
     private void startPlaybackMonitor() {
@@ -772,7 +831,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void inspectPlaybackState() {
-        if (webView == null) {
+        if (webView == null || isFinishing() || isDestroyed()) {
             return;
         }
 
@@ -796,13 +855,18 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "var duration=(isFinite(selected.duration)&&selected.duration>0)?selected.duration:0;"
                 + "var current=(isFinite(selected.currentTime)&&selected.currentTime>=0)?selected.currentTime:0;"
                 + "var remaining=duration>0?Math.max(0,duration-current):0;"
-                + "return {hasMedia:true,duration:duration,currentTime:current,remaining:remaining,ended:!!selected.ended};"
+                + "return {hasMedia:true,duration:duration,currentTime:current,remaining:remaining,ended:!!selected.ended,paused:!!selected.paused};"
                 + "} catch(err) {"
                 + "return {hasMedia:false};"
                 + "}"
                 + "})();";
 
-        webView.evaluateJavascript(js, raw -> handlePlaybackProbe(raw));
+        if (webView != null && !isFinishing() && !isDestroyed()) {
+            try {
+                webView.evaluateJavascript(js, this::handlePlaybackProbe);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private void handlePlaybackProbe(String raw) {
@@ -821,8 +885,24 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             double duration = state.optDouble("duration", 0d);
             double remaining = state.optDouble("remaining", Double.MAX_VALUE);
             boolean ended = state.optBoolean("ended", false);
+            boolean isPaused = state.optBoolean("paused", false);
 
-            updateOverlayState(currentTime, duration, false);
+            if (!positionRestored && resumePositionMs > 0 && duration > 0) {
+                double targetSec = resumePositionMs / 1000.0;
+                if (targetSec < duration) {
+                    String seekJs = "(function(){"
+                            + "try{"
+                            + "var v=document.querySelector('video');"
+                            + "if(v){v.currentTime=" + targetSec + ";}"
+                            + "if(window.jwplayer){try{window.jwplayer().seek(" + targetSec + ");}catch(e){}}"
+                            + "}catch(e){}"
+                            + "})();";
+                    webView.evaluateJavascript(seekJs, null);
+                }
+                positionRestored = true;
+            }
+
+            updateOverlayState(currentTime, duration, isPaused);
             savePlaybackProgress(currentTime, duration);
 
             if (!isSeriesEpisodePlayback()) {
@@ -856,16 +936,17 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void showNextEpisodeButton(double remainingSec) {
-        if (nextEpisodeButton == null || nextEpisodeInfo == null || isTransitioningToNextEpisode) {
+        if (!SHOW_NEXT_EPISODE_BUTTON || nextEpisodeButton == null || nextEpisodeInfo == null
+                || isTransitioningToNextEpisode) {
             return;
         }
 
-        int countdown = (int) Math.ceil(Math.max(0d, remainingSec));
         String code = formatEpisodeCode(nextEpisodeInfo.seasonNumber, nextEpisodeInfo.episodeNumber);
-        if (countdown > 0) {
-            nextEpisodeButton.setText("Siguiente " + code + " (" + countdown + "s)");
+        if (remainingSec <= 30d) {
+            int countdown = (int) Math.ceil(Math.max(0d, remainingSec));
+            nextEpisodeButton.setText("Siguiente episodio (" + countdown + "s)");
         } else {
-            nextEpisodeButton.setText("Siguiente " + code);
+            nextEpisodeButton.setText("Siguiente episodio • " + code);
         }
 
         if (nextButtonVisible && nextEpisodeButton.getVisibility() == View.VISIBLE) {
@@ -1006,7 +1087,14 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         ArrayList<String> directStreamUrls = extractDirectStreamUrls(urls);
         if (!directStreamUrls.isEmpty()) {
             String title = seriesTitle + " - " + formatEpisodeCode(episode.seasonNumber, episode.episodeNumber);
-            PlayerExoActivity.start(this, directStreamUrls, title);
+            String nextContentId = (seriesPostId > 0 && episode.episodeId > 0)
+                    ? seriesPostId + "_" + episode.episodeId : contentId;
+            String embedReferer = originOf(!urls.isEmpty() ? urls.get(0) : null);
+            PlayerExoActivity.start(this, directStreamUrls, title,
+                    nextContentId, seriesTitle, imageUrl,
+                    seriesPostId, seriesPostType,
+                    episode.episodeId, episode.seasonNumber, episode.episodeNumber,
+                    0L, null, embedReferer);
             finish();
             return;
         }
@@ -1014,7 +1102,12 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         currentEpisodeId = episode.episodeId;
         currentSeasonNumber = episode.seasonNumber;
         currentEpisodeNumber = episode.episodeNumber;
+        contentId = buildContentId();
+        resumePositionMs = 0L;
+        positionRestored = false;
+        lastSavedPositionSec = -1;
         nextEpisodeInfo = null;
+        seasonPreloadAttempted = false;
 
         serverUrls.clear();
         serverUrls.addAll(urls);
@@ -1078,7 +1171,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void switchToExoPlayer(String streamUrl) {
-        if (exoSwitchInProgress || streamUrl == null || streamUrl.trim().isEmpty()) {
+        if (disableExoSwitch || exoSwitchInProgress || streamUrl == null || streamUrl.trim().isEmpty()) {
             return;
         }
         if (isFinishing() || isDestroyed()) {
@@ -1092,9 +1185,41 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         ArrayList<String> direct = new ArrayList<>();
         direct.add(streamUrl.trim());
         String title = getTitle() == null ? "Reproduciendo" : String.valueOf(getTitle());
-        PlayerExoActivity.start(this, direct, title);
+        String embedUrl = currentEmbedUrl();
+        String embedReferer = embedUrl != null ? originOf(embedUrl) : null;
+        PlayerExoActivity.start(this, direct, title,
+                contentId, seriesTitle, imageUrl,
+                seriesPostId, seriesPostType,
+                currentEpisodeId, currentSeasonNumber, currentEpisodeNumber,
+                resumePositionMs, embedUrl, embedReferer);
+        resumed = false;
         setPlaybackResult();
         finish();
+    }
+
+    private String currentEmbedUrl() {
+        if (serverUrls != null && currentServerIndex >= 0 && currentServerIndex < serverUrls.size()) {
+            String url = serverUrls.get(currentServerIndex);
+            if (url != null && !url.trim().isEmpty()) {
+                return url.trim();
+            }
+        }
+        if (lastLoadedEmbedUrl != null && !lastLoadedEmbedUrl.isEmpty()) {
+            return lastLoadedEmbedUrl;
+        }
+        return null;
+    }
+
+    private String originOf(String url) {
+        try {
+            android.net.Uri uri = android.net.Uri.parse(url);
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return null;
+            }
+            return uri.getScheme() + "://" + uri.getHost();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String formatEpisodeCode(int season, int episode) {
@@ -1104,10 +1229,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void preloadSeasonData() {
-        if (!isSeriesEpisodePlayback() || loadingSeasonData) {
+        if (!isSeriesEpisodePlayback() || loadingSeasonData || seasonPreloadAttempted) {
             return;
         }
-
+        seasonPreloadAttempted = true;
         loadingSeasonData = true;
         new Thread(() -> {
             try {
@@ -1218,7 +1343,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
         item.setCompleted(false);
 
-        ContinueWatchingStore.save(this, item);
+        final ContinueWatchingItem itemToSave = item;
+        saveExecutor.execute(() -> {
+            try {
+                ContinueWatchingStore.save(PlayerContenidoActivity.this, itemToSave);
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     private void schedulePositionRestore() {
@@ -1235,6 +1366,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                         + "if(v&&isFinite(v.duration)&&v.duration>0){"
                         + "  v.currentTime=" + targetSec + ";"
                         + "  return true;"
+                        + "}"
+                        + "if(window.jwplayer){"
+                        + "  var jw=window.jwplayer();"
+                        + "  if(jw&&jw.seek&&jw.getState&&jw.getState()!=='idle'){"
+                        + "    jw.seek(" + targetSec + ");"
+                        + "    return true;"
+                        + "  }"
                         + "}"
                         + "return false;"
                         + "}catch(e){return false;}"
@@ -1420,6 +1558,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
         setPlaybackResult();
         finish();
+        overridePendingTransition(0, android.R.anim.fade_out);
     }
 
     private void setPlaybackResult() {
@@ -1460,18 +1599,24 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
         cancelServerTimeout();
-        handler.removeCallbacks(autoPlayRunnable);
-        handler.removeCallbacks(playbackMonitorRunnable);
-        handler.removeCallbacks(tvHideControlsRunnable);
+        cancelAutoHide();
         if (lastSavedPositionSec >= 0) {
             savePlaybackProgress(lastSavedPositionSec,
                     contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
         }
         setPlaybackResult();
         if (webView != null) {
+            android.view.ViewParent parent = webView.getParent();
+            if (parent instanceof android.view.ViewGroup) {
+                ((android.view.ViewGroup) parent).removeView(webView);
+            }
+            webView.removeAllViews();
             webView.destroy();
+            webView = null;
         }
+        saveExecutor.shutdown();
         super.onDestroy();
     }
 
@@ -1481,6 +1626,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         resumed = false;
         handler.removeCallbacks(playbackMonitorRunnable);
         handler.removeCallbacks(tvHideControlsRunnable);
+        cancelAutoHide();
         if (lastSavedPositionSec >= 0) {
             savePlaybackProgress(lastSavedPositionSec,
                     contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
@@ -1494,11 +1640,12 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private void initControls() {
         controlOverlay = findViewById(R.id.control_overlay);
         centerControls = findViewById(R.id.center_controls);
+        topBar = findViewById(R.id.top_bar);
+        bottomBar = findViewById(R.id.bottom_bar);
+        btnBack = findViewById(R.id.btn_back);
         btnPlayCenter = findViewById(R.id.btn_play_center);
-        btnPlaySmall = findViewById(R.id.btn_play_small);
         btnSkipBack = findViewById(R.id.btn_skip_back);
         btnSkipForward = findViewById(R.id.btn_skip_forward);
-        btnSpeed = findViewById(R.id.btn_speed);
         seekBar = findViewById(R.id.player_seekbar);
         tvCurrentTime = findViewById(R.id.tv_current_time);
         tvDuration = findViewById(R.id.tv_duration);
@@ -1511,16 +1658,16 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         findViewById(R.id.btn_audio).setVisibility(View.GONE);
         findViewById(R.id.btn_fullscreen).setVisibility(View.GONE);
         findViewById(R.id.btn_lock).setVisibility(View.GONE);
+        findViewById(R.id.btn_cast).setVisibility(View.GONE);
 
         controlOverlay.setVisibility(View.VISIBLE);
         controlOverlay.setAlpha(0f);
         controlOverlay.setOnClickListener(v -> toggleControls());
 
+        btnBack.setOnClickListener(v -> finishWithResult());
         btnPlayCenter.setOnClickListener(v -> toggleWebViewPlayback());
-        btnPlaySmall.setOnClickListener(v -> toggleWebViewPlayback());
         btnSkipBack.setOnClickListener(v -> webViewSkip(-10000));
         btnSkipForward.setOnClickListener(v -> webViewSkip(10000));
-        btnSpeed.setOnClickListener(v -> showWebViewSpeedSelector());
 
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             private boolean fromUser = false;
@@ -1530,11 +1677,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             }
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
+                seekBarDragging = true;
                 fromUser = true;
                 cancelAutoHide();
             }
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
+                seekBarDragging = false;
                 if (fromUser && lastVideoDurationMs > 0) {
                     long seekPos = lastVideoDurationMs * seekBar.getProgress() / seekBar.getMax();
                     webViewSeekTo(seekPos);
@@ -1542,6 +1691,35 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 fromUser = false;
                 resetAutoHide();
             }
+        });
+
+        // Tap en cualquier punto de la barra = saltar a esa posición (sin arrastrar).
+        // Se detecta por umbral de movimiento (touch slop), no por seekBarDragging,
+        // para que el primer toque siempre adelante/atrase.
+        final float touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        seekBar.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    seekDownX = event.getX();
+                    break;
+                case MotionEvent.ACTION_UP:
+                    if (seekDownX >= 0 && Math.abs(event.getX() - seekDownX) < touchSlop) {
+                        SeekBar sb = (SeekBar) v;
+                        int available = sb.getWidth() - sb.getPaddingLeft() - sb.getPaddingRight();
+                        if (available > 0) {
+                            float fraction = Math.max(0f, Math.min(1f,
+                                    (event.getX() - sb.getPaddingLeft()) / available));
+                            sb.setProgress(Math.round(fraction * sb.getMax()));
+                            if (lastVideoDurationMs > 0) {
+                                webViewSeekTo(Math.round(fraction * lastVideoDurationMs));
+                            }
+                            resetAutoHide();
+                        }
+                    }
+                    seekDownX = -1f;
+                    break;
+            }
+            return false;
         });
     }
 
@@ -1572,53 +1750,30 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             null);
     }
 
-    private void showWebViewSpeedSelector() {
-        final double[] speeds = {0.5d, 0.75d, 1d, 1.25d, 1.5d, 1.75d, 2d};
-        String[] labels = {"0.5x", "0.75x", "Normal", "1.25x", "1.5x", "1.75x", "2x"};
-        new androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("Velocidad")
-                .setSingleChoiceItems(labels, 2, (dialog, which) -> {
-                    setWebViewPlaybackSpeed(speeds[which]);
-                    resetAutoHide();
-                    dialog.dismiss();
-                })
-                .setNegativeButton("Cerrar", null)
-                .show();
-    }
-
-    private void setWebViewPlaybackSpeed(double speed) {
-        if (webView == null) return;
-        webView.evaluateJavascript(
-                "(function(){try{var media=document.querySelectorAll('video,audio');"
-                        + "for(var i=0;i<media.length;i++){media[i].playbackRate=" + speed + ";}"
-                        + "return media.length>0;}catch(e){return false}})();",
-                null);
-    }
-
     private void updateOverlayState(double currentTimeSec, double durationSec, boolean isPaused) {
         if (controlOverlay == null) return;
         lastVideoDurationMs = (long) (durationSec * 1000);
-        long posMs = (long) (currentTimeSec * 1000);
-        long durMs = (long) (durationSec * 1000);
 
-        tvCurrentTime.setText(formatTime(posMs));
-        tvDuration.setText(formatTime(durMs));
-
-        if (seekBar != null && durMs > 0) {
-            int progress = (int) (posMs * seekBar.getMax() / durMs);
-            seekBar.setProgress(progress);
+        // Solo actualizar textos/seekbar cuando los controles están visibles para
+        // evitar trabajo de UI inútil mientras el video se reproduce a pantalla completa.
+        if (controlsVisible) {
+            long posMs = (long) (currentTimeSec * 1000);
+            long durMs = (long) (durationSec * 1000);
+            tvCurrentTime.setText(formatTime(posMs));
+            tvDuration.setText(formatTime(durMs));
+            if (seekBar != null && durMs > 0) {
+                int progress = (int) (posMs * seekBar.getMax() / durMs);
+                seekBar.setProgress(progress);
+            }
         }
 
         updatePlayPauseIcons(!isPaused);
     }
 
     private void updatePlayPauseIcons(boolean playing) {
-        if (btnPlayCenter == null || btnPlaySmall == null) return;
+        if (btnPlayCenter == null) return;
         int icon = playing ? R.drawable.ic_pause : R.drawable.ic_play;
         btnPlayCenter.setImageResource(icon);
-        if (btnPlaySmall != null) {
-            btnPlaySmall.setImageResource(icon);
-        }
     }
 
     private String formatTime(long ms) {
@@ -1636,10 +1791,40 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private void showControls() {
         if (controlOverlay == null) return;
         controlsVisible = true;
+        float slide = 10f * getResources().getDisplayMetrics().density;
+
         controlOverlay.setVisibility(View.VISIBLE);
-        controlOverlay.animate().alpha(1f).setDuration(200).start();
+        controlOverlay.setAlpha(0f);
+        controlOverlay.animate().alpha(1f).setDuration(220).start();
+
+        if (topBar != null) {
+            topBar.setVisibility(View.VISIBLE);
+            topBar.setTranslationY(-slide);
+            topBar.setAlpha(0f);
+            topBar.animate().translationY(0f).alpha(1f).setDuration(220).start();
+        }
+        if (bottomBar != null) {
+            bottomBar.setVisibility(View.VISIBLE);
+            bottomBar.setTranslationY(slide);
+            bottomBar.setAlpha(0f);
+            bottomBar.animate().translationY(0f).alpha(1f).setDuration(220).start();
+        }
+        if (centerControls != null) {
+            centerControls.setVisibility(View.VISIBLE);
+            centerControls.setScaleX(0.92f);
+            centerControls.setScaleY(0.92f);
+            centerControls.setAlpha(0f);
+            centerControls.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(220).start();
+        }
+
         cancelAutoHide();
         resetAutoHide();
+
+        // Refrescar tiempos/seekbar al mostrar controles (el monitor no los
+        // actualiza mientras están ocultos).
+        if (pageLoaded && !isTransitioningToNextEpisode) {
+            handler.postDelayed(this::inspectPlaybackState, 60L);
+        }
     }
 
     private void hideControls() {
@@ -1647,7 +1832,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         controlsVisible = false;
         controlOverlay.animate()
                 .alpha(0f)
-                .setDuration(300)
+                .setDuration(280)
                 .withEndAction(() -> {
                     if (!controlsVisible) controlOverlay.setVisibility(View.GONE);
                 })
@@ -1703,6 +1888,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void enterImmersiveMode() {
+        getWindow().setNavigationBarColor(android.graphics.Color.BLACK);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            getWindow().setNavigationBarDividerColor(android.graphics.Color.BLACK);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
@@ -1773,43 +1965,49 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             "catch(e){}"
             + "try{if(window.jwplayer){var jw2=window.jwplayer('vplayer');if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}}}" +
             "catch(e){}"
-            // ── MutationObserver para videos dinámicos ──
-            + "if(!window.__rexVideoObserver){"
-            + "  window.__rexVideoObserver=true;"
-            + "  new MutationObserver(function(m){"
-            + "    m.forEach(function(mut){"
-            + "      mut.addedNodes.forEach(function(n){"
-            + "        if(n.nodeName==='VIDEO'){"
-            + "          n.removeAttribute('controls');"
-            + "          n.setAttribute('playsinline','');"
-            + "        }"
-            + "        if(n.querySelectorAll){"
-            + "          n.querySelectorAll('video').forEach(function(v){"
-            + "            v.removeAttribute('controls');"
-            + "            v.setAttribute('playsinline','');"
-            + "          });"
-            + "        }"
+            // ── MutationObserver + polling SOLO para páginas con JW Player ──
+            // (en sitios con hls.js/vimeos no aplica y observar todo el DOM es caro)
+            + "var host=(location&&location.hostname?location.hostname.toLowerCase():'');"
+            + "var hasJw=typeof window.jwplayer!=='undefined'"
+            + "  ||typeof window.playerInstance!=='undefined'"
+            + "  ||host.indexOf('jwplayer')!==-1||host.indexOf('jwpsrv')!==-1;"
+            + "if(hasJw){"
+            + "  if(!window.__rexVideoObserver){"
+            + "    window.__rexVideoObserver=true;"
+            + "    new MutationObserver(function(m){"
+            + "      m.forEach(function(mut){"
+            + "        mut.addedNodes.forEach(function(n){"
+            + "          if(n.nodeName==='VIDEO'){"
+            + "            n.removeAttribute('controls');"
+            + "            n.setAttribute('playsinline','');"
+            + "          }"
+            + "          if(n.querySelectorAll){"
+            + "            n.querySelectorAll('video').forEach(function(v){"
+            + "              v.removeAttribute('controls');"
+            + "              v.setAttribute('playsinline','');"
+            + "            });"
+            + "          }"
+            + "        });"
             + "      });"
-            + "    });"
-            + "  }).observe(document,{childList:true,subtree:true});"
-            + "}"
-            // ── Polling: JW Player puede inicializarse después ──
-            + "if(!window.__rexJwPolling){"
-            + "  window.__rexJwPolling=true;"
-            + "  var attempts=0;"
-            + "  var pollTimer=setInterval(function(){"
-            + "    attempts++;"
-            + "    try{"
-            + "      if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}"
-            + "      if(window.jwplayer){"
-            + "        var jw=window.jwplayer();"
-            + "        if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}"
-            + "        var jw2=window.jwplayer('vplayer');"
-            + "        if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}"
-            + "      }"
-            + "    }catch(e){}"
-            + "    if(attempts>20)clearInterval(pollTimer);"
-            + "  },500);"
+            + "    }).observe(document,{childList:true,subtree:true});"
+            + "  }"
+            + "  if(!window.__rexJwPolling){"
+            + "    window.__rexJwPolling=true;"
+            + "    var attempts=0;"
+            + "    var pollTimer=setInterval(function(){"
+            + "      attempts++;"
+            + "      try{"
+            + "        if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}"
+            + "        if(window.jwplayer){"
+            + "          var jw=window.jwplayer();"
+            + "          if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}"
+            + "          var jw2=window.jwplayer('vplayer');"
+            + "          if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}"
+            + "        }"
+            + "      }catch(e){}"
+            + "      if(attempts>10)clearInterval(pollTimer);"
+            + "    },1000);"
+            + "  }"
             + "}"
             + "}catch(e){}"
             + "})();", null

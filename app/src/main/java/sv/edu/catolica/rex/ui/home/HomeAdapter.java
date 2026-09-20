@@ -243,6 +243,7 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
             final TextView tvTitle;
             final TextView tvYear;
             final TextView tvRating;
+            final View progressContainer;
             final View progressBg;
             final View progressFg;
             final boolean isTv;
@@ -255,6 +256,7 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 tvTitle = itemView.findViewById(R.id.tv_title);
                 tvYear = itemView.findViewById(R.id.tv_year);
                 tvRating = itemView.findViewById(R.id.tv_rating);
+                progressContainer = itemView.findViewById(R.id.progress_container);
                 progressBg = itemView.findViewById(R.id.progress_bg);
                 progressFg = itemView.findViewById(R.id.progress_fg);
 
@@ -355,19 +357,24 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     }
                 }
 
-                if (progressBg != null && progressFg != null) {
+                if (progressFg != null) {
                     int progress = item.getProgress();
                     if (progress > 0) {
-                        progressBg.setVisibility(View.VISIBLE);
+                        if (progressContainer != null) progressContainer.setVisibility(View.VISIBLE);
+                        if (progressBg != null) progressBg.setVisibility(View.VISIBLE);
                         progressFg.setVisibility(View.VISIBLE);
                         progressFg.post(() -> {
-                            int totalW = progressBg.getWidth();
-                            ViewGroup.LayoutParams fgLp = progressFg.getLayoutParams();
-                            fgLp.width = (int) (totalW * progress / 100f);
-                            progressFg.setLayoutParams(fgLp);
+                            int totalW = progressContainer != null ? progressContainer.getWidth()
+                                    : (progressBg != null ? progressBg.getWidth() : 0);
+                            if (totalW > 0) {
+                                ViewGroup.LayoutParams fgLp = progressFg.getLayoutParams();
+                                fgLp.width = Math.max(4, (int) (totalW * progress / 100f));
+                                progressFg.setLayoutParams(fgLp);
+                            }
                         });
                     } else {
-                        progressBg.setVisibility(View.GONE);
+                        if (progressContainer != null) progressContainer.setVisibility(View.GONE);
+                        if (progressBg != null) progressBg.setVisibility(View.GONE);
                         progressFg.setVisibility(View.GONE);
                     }
                 }

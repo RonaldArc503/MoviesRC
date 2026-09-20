@@ -9,16 +9,22 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.media.AudioManager;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import sv.edu.catolica.rex.network.AllCalidadScraper;
+import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
@@ -40,16 +46,26 @@ import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.cast.CastPlayer;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
+import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
+import androidx.mediarouter.app.MediaRouteButton;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+
+import com.google.android.gms.cast.framework.CastContext;
+import com.google.android.gms.cast.framework.CastState;
+import com.google.android.gms.cast.framework.CastButtonFactory;
+import com.google.android.gms.cast.framework.CastStateListener;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.models.ContinueWatchingItem;
@@ -76,9 +92,10 @@ public class PlayerExoActivity extends AppCompatActivity {
     private static final String EXTRA_EPISODE_NUMBER = "exo_episode_number";
     private static final String EXTRA_IMAGE_URL = "exo_image_url";
     private static final String EXTRA_RESUME_POSITION_MS = "exo_resume_position_ms";
+    public static final String EXTRA_IS_LIVE = "exo_is_live";
 
     private static final int TIMEOUT_MS = 20_000;
-    private static final long VIDEO_WATCHDOG_MS = 15_000L;
+    private static final long VIDEO_WATCHDOG_MS = 25_000L;
     private static final long PROGRESS_SAVE_INTERVAL_MS = 10_000L;
     private static final long CONTROLS_AUTO_HIDE_MS = 3000L;
     private static final String USER_AGENT =
@@ -86,6 +103,7 @@ public class PlayerExoActivity extends AppCompatActivity {
             "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
     private PlayerView playerView;
+    private int currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
     private ProgressBar progressBar;
     private ExoPlayer player;
     private DefaultHttpDataSource.Factory httpDataSourceFactory;
@@ -105,6 +123,12 @@ public class PlayerExoActivity extends AppCompatActivity {
     private String requestOrigin;
     private String fallbackEmbedUrl;
     private String fallbackReferer;
+    private boolean isLiveStream = false;
+    private View liveBadge;
+    private View seekbarContainer;
+    private View flSubtitles;
+    private View llSkipBack;
+    private View llSkipForward;
 
     private String contentId = "";
     private String seriesTitle = "";
@@ -118,6 +142,28 @@ public class PlayerExoActivity extends AppCompatActivity {
     private boolean contentEnded = false;
     private boolean progressSaveScheduled = false;
 
+    // Series next episode navigation
+    private Button btnNextEpisode;
+    private final List<AllCalidadScraper.Season> seasonCache = new ArrayList<>();
+    private boolean loadingSeasonData = false;
+    private boolean seasonPreloadAttempted = false;
+    private boolean isTransitioningToNextEpisode = false;
+
+    private static class NextEpisodeInfo {
+        final int episodeId;
+        final int seasonNumber;
+        final int episodeNumber;
+        final String title;
+
+        NextEpisodeInfo(int episodeId, int seasonNumber, int episodeNumber, String title) {
+            this.episodeId = episodeId;
+            this.seasonNumber = seasonNumber;
+            this.episodeNumber = episodeNumber;
+            this.title = title;
+        }
+    }
+    private NextEpisodeInfo nextEpisodeInfo;
+
     // Controls overlay
     private View controlOverlay;
     private View scrimTop;
@@ -126,14 +172,12 @@ public class PlayerExoActivity extends AppCompatActivity {
     private View bottomBar;
     private View centerControls;
     private ImageButton btnPlayCenter;
-    private ImageButton btnPlaySmall;
     private ImageButton btnSkipBack;
     private ImageButton btnSkipForward;
     private ImageButton btnLock;
     private ImageButton btnQuality;
     private ImageButton btnSubtitles;
     private ImageButton btnAudio;
-    private ImageButton btnSpeed;
     private ImageButton btnFullscreen;
     private SeekBar seekBar;
     private TextView tvCurrentTime;
@@ -141,8 +185,22 @@ public class PlayerExoActivity extends AppCompatActivity {
     private TextView tvTitle;
     private boolean controlsVisible = true;
     private boolean controlsLocked = false;
+    private boolean seekBarDragging = false;
+    private float seekDownX = -1f;
     private long lastVideoTapUpMs = 0L;
     private float lastVideoTapX = -1f;
+
+    // Casting
+    private ImageButton btnCast;
+    private ImageButton btnBack;
+    private MediaRouteButton mediaRouteButton;
+    private CastContext castContext;
+    private CastPlayer castPlayer;
+    private CastStateListener castStateListener;
+    private boolean isCasting = false;
+
+    /** Guarda el progreso en un hilo de fondo para no saturar el main thread. */
+    private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor();
 
     public static void start(Context context, ArrayList<String> streamUrls, String title) {
         start(context, streamUrls, title, false);
@@ -153,6 +211,15 @@ public class PlayerExoActivity extends AppCompatActivity {
         intent.putStringArrayListExtra(EXTRA_URLS, streamUrls);
         intent.putExtra(EXTRA_TITLE, title);
         intent.putExtra(EXTRA_DISABLE_CACHE, disableCache);
+        context.startActivity(intent);
+    }
+
+    public static void start(Context context, ArrayList<String> streamUrls, String title, boolean disableCache, boolean isLive) {
+        Intent intent = new Intent(context, PlayerExoActivity.class);
+        intent.putStringArrayListExtra(EXTRA_URLS, streamUrls);
+        intent.putExtra(EXTRA_TITLE, title);
+        intent.putExtra(EXTRA_DISABLE_CACHE, disableCache);
+        intent.putExtra(EXTRA_IS_LIVE, isLive);
         context.startActivity(intent);
     }
 
@@ -175,11 +242,51 @@ public class PlayerExoActivity extends AppCompatActivity {
         context.startActivity(intent);
     }
 
+    public static void start(Context context,
+                             ArrayList<String> streamUrls,
+                             String title,
+                             String contentId,
+                             String seriesTitle,
+                             String imageUrl,
+                             int postId,
+                             String mediaType,
+                             int episodeId,
+                             int seasonNumber,
+                             int episodeNumber,
+                             long resumePositionMs,
+                             String fallbackEmbedUrl,
+                             String fallbackReferer) {
+        Intent intent = new Intent(context, PlayerExoActivity.class);
+        intent.putStringArrayListExtra(EXTRA_URLS, streamUrls);
+        intent.putExtra(EXTRA_TITLE, title);
+        intent.putExtra(EXTRA_CONTENT_ID, contentId == null ? "" : contentId);
+        intent.putExtra(EXTRA_SERIES_TITLE, seriesTitle == null ? "" : seriesTitle);
+        intent.putExtra(EXTRA_IMAGE_URL, imageUrl == null ? "" : imageUrl);
+        intent.putExtra(EXTRA_POST_ID, postId);
+        intent.putExtra(EXTRA_MEDIA_TYPE, mediaType == null ? "" : mediaType);
+        intent.putExtra(EXTRA_EPISODE_ID, episodeId);
+        intent.putExtra(EXTRA_SEASON_NUMBER, seasonNumber);
+        intent.putExtra(EXTRA_EPISODE_NUMBER, episodeNumber);
+        if (resumePositionMs > 0) {
+            intent.putExtra(EXTRA_RESUME_POSITION_MS, resumePositionMs);
+        }
+        if (fallbackEmbedUrl != null && !fallbackEmbedUrl.isEmpty()) {
+            intent.putExtra(EXTRA_FALLBACK_EMBED_URL, fallbackEmbedUrl);
+        }
+        if (fallbackReferer != null && !fallbackReferer.isEmpty()) {
+            intent.putExtra(EXTRA_FALLBACK_REFERER, fallbackReferer);
+            intent.putExtra(EXTRA_REFERER, fallbackReferer);
+            intent.putExtra(EXTRA_ORIGIN, fallbackReferer);
+        }
+        context.startActivity(intent);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         setContentView(R.layout.activity_player_exo);
+        PlaybackCacheHelper.initCacheAsync(this);
         enterImmersiveMode();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             getWindow().getAttributes().layoutInDisplayCutoutMode =
@@ -187,8 +294,12 @@ public class PlayerExoActivity extends AppCompatActivity {
         }
 
         playerView = findViewById(R.id.player_view);
+        if (playerView != null) {
+            playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        }
         progressBar = findViewById(R.id.buffer_progress);
         disableCache = getIntent().getBooleanExtra(EXTRA_DISABLE_CACHE, false);
+        isLiveStream = getIntent().getBooleanExtra(EXTRA_IS_LIVE, false);
         requestReferer = getIntent().getStringExtra(EXTRA_REFERER);
         requestOrigin = getIntent().getStringExtra(EXTRA_ORIGIN);
         fallbackEmbedUrl = getIntent().getStringExtra(EXTRA_FALLBACK_EMBED_URL);
@@ -225,7 +336,99 @@ public class PlayerExoActivity extends AppCompatActivity {
 
         initControls();
         setupPlayer();
+        initCasting();
         playCurrentUrl();
+
+        if (isSeriesEpisodePlayback()) {
+            preloadSeasonData();
+            startSeriesNextMonitor();
+        }
+    }
+
+    private void initCasting() {
+        if (btnCast != null) {
+            btnCast.setVisibility(View.VISIBLE);
+            btnCast.setEnabled(false);
+            btnCast.setAlpha(0.45f);
+        }
+        try {
+            if (mediaRouteButton != null) {
+                CastButtonFactory.setUpMediaRouteButton(getApplicationContext(), mediaRouteButton);
+            }
+            castContext = CastContext.getSharedInstance(this);
+            castPlayer = new CastPlayer(castContext);
+            castStateListener = new CastStateListener() {
+                @Override
+                public void onCastStateChanged(int state) {
+                    if (state == CastState.CONNECTED && !isCasting) {
+                        switchToCast();
+                    } else if (state != CastState.CONNECTED && isCasting) {
+                        switchToLocal();
+                    }
+                    updateCastButtonState(state);
+                }
+            };
+            castContext.addCastStateListener(castStateListener);
+            updateCastButtonState(castContext.getCastState());
+        } catch (Exception e) {
+            if (btnCast != null) {
+                btnCast.setVisibility(View.VISIBLE);
+                btnCast.setEnabled(false);
+                btnCast.setAlpha(0.45f);
+            }
+        }
+    }
+
+    private void updateCastButtonState(int state) {
+        if (btnCast == null) return;
+        boolean available = state != CastState.NO_DEVICES_AVAILABLE;
+        btnCast.setVisibility(View.VISIBLE);
+        btnCast.setEnabled(available);
+        btnCast.setAlpha(available ? 1f : 0.45f);
+        btnCast.setImageResource(isCasting ? R.drawable.ic_cast_connected : R.drawable.ic_tv);
+    }
+
+    private void switchToCast() {
+        if (player == null || castPlayer == null) return;
+        isCasting = true;
+        long position = player.getCurrentPosition();
+        boolean wasPlaying = player.getPlayWhenReady();
+        player.pause();
+
+        MediaItem currentItem = player.getCurrentMediaItem();
+        if (currentItem != null) {
+            castPlayer.setMediaItem(currentItem);
+            castPlayer.prepare();
+            castPlayer.seekTo(position);
+            if (wasPlaying) castPlayer.play();
+        }
+
+        playerView.setPlayer(castPlayer);
+        btnCast.setImageResource(R.drawable.ic_cast_connected);
+        btnCast.setAlpha(1f);
+        Toast.makeText(this, "Transmitiendo a TV", Toast.LENGTH_SHORT).show();
+        showControls();
+    }
+
+    private void switchToLocal() {
+        if (player == null || castPlayer == null) return;
+        isCasting = false;
+        long position = castPlayer.getCurrentPosition();
+        boolean wasPlaying = castPlayer.getPlayWhenReady();
+
+        castPlayer.stop();
+
+        playerView.setPlayer(player);
+        if (position > 0) player.seekTo(position);
+        if (wasPlaying) player.play();
+
+        btnCast.setImageResource(R.drawable.ic_tv);
+        Toast.makeText(this, "Transmisión detenida", Toast.LENGTH_SHORT).show();
+        showControls();
+    }
+
+    private Player getCurrentPlayer() {
+        return isCasting && castPlayer != null ? castPlayer : player;
     }
 
     private void initControls() {
@@ -236,27 +439,37 @@ public class PlayerExoActivity extends AppCompatActivity {
         bottomBar = findViewById(R.id.bottom_bar);
         centerControls = findViewById(R.id.center_controls);
         btnPlayCenter = findViewById(R.id.btn_play_center);
-        btnPlaySmall = findViewById(R.id.btn_play_small);
         btnSkipBack = findViewById(R.id.btn_skip_back);
         btnSkipForward = findViewById(R.id.btn_skip_forward);
         btnLock = findViewById(R.id.btn_lock);
         btnQuality = findViewById(R.id.btn_quality);
         btnSubtitles = findViewById(R.id.btn_subtitles);
         btnAudio = findViewById(R.id.btn_audio);
-        btnSpeed = findViewById(R.id.btn_speed);
         btnFullscreen = findViewById(R.id.btn_fullscreen);
+        btnBack = findViewById(R.id.btn_back);
+        btnCast = findViewById(R.id.btn_cast);
+        mediaRouteButton = findViewById(R.id.media_route_button);
         seekBar = findViewById(R.id.player_seekbar);
         tvCurrentTime = findViewById(R.id.tv_current_time);
         tvDuration = findViewById(R.id.tv_duration);
         tvTitle = findViewById(R.id.tv_player_title);
+        liveBadge = findViewById(R.id.ll_live_badge);
+        seekbarContainer = findViewById(R.id.ll_seekbar_container);
+        flSubtitles = findViewById(R.id.fl_subtitles);
+        llSkipBack = findViewById(R.id.ll_skip_back);
+        llSkipForward = findViewById(R.id.ll_skip_forward);
 
-        tvTitle.setText(playbackTitle);
+        btnNextEpisode = findViewById(R.id.btn_next_episode);
+        if (btnNextEpisode != null) {
+            btnNextEpisode.setOnClickListener(v -> playNextEpisode(false));
+        }
+
+        updateLiveUi(isLiveStream);
 
         controlOverlay.setVisibility(View.VISIBLE);
-        controlOverlay.setOnClickListener(v -> toggleControls());
+        controlOverlay.setClickable(false);
 
         btnPlayCenter.setOnClickListener(v -> togglePlayPause());
-        btnPlaySmall.setOnClickListener(v -> togglePlayPause());
         btnSkipBack.setOnClickListener(v -> skip(-10000));
         btnSkipForward.setOnClickListener(v -> skip(10000));
 
@@ -264,8 +477,15 @@ public class PlayerExoActivity extends AppCompatActivity {
         btnQuality.setOnClickListener(v -> showTrackSelector(C.TRACK_TYPE_VIDEO));
         btnSubtitles.setOnClickListener(v -> showTrackSelector(C.TRACK_TYPE_TEXT));
         btnAudio.setOnClickListener(v -> showTrackSelector(C.TRACK_TYPE_AUDIO));
-        btnSpeed.setOnClickListener(v -> showSpeedSelector());
+        btnBack.setOnClickListener(v -> finishPlayer());
         btnFullscreen.setOnClickListener(v -> toggleFullscreen());
+        btnCast.setOnClickListener(v -> {
+            if (mediaRouteButton != null) {
+                mediaRouteButton.showDialog();
+            } else {
+                Toast.makeText(this, "Google Cast no esta disponible", Toast.LENGTH_SHORT).show();
+            }
+        });
         playerView.setOnTouchListener((v, event) -> handleVideoSurfaceTouch(v, event));
 
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -278,23 +498,58 @@ public class PlayerExoActivity extends AppCompatActivity {
 
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
+                seekBarDragging = true;
                 fromUser = true;
                 cancelAutoHide();
             }
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                if (fromUser && player != null) {
-                    long duration = player.getDuration();
+                seekBarDragging = false;
+                Player p = getCurrentPlayer();
+                if (fromUser && p != null) {
+                    long duration = p.getDuration();
                     if (duration > 0) {
                         long seekPos = duration * seekBar.getProgress() / seekBar.getMax();
-                        player.seekTo(seekPos);
+                        p.seekTo(seekPos);
                         updateTimeLabels();
                     }
                 }
                 fromUser = false;
                 resetAutoHide();
             }
+        });
+
+        // Tap en cualquier punto de la barra = saltar a esa posición (sin arrastrar).
+        // Se detecta por umbral de movimiento (touch slop), no por seekBarDragging,
+        // para que el primer toque siempre adelante/atrase.
+        final float touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        seekBar.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    seekDownX = event.getX();
+                    break;
+                case MotionEvent.ACTION_UP:
+                    if (seekDownX >= 0 && Math.abs(event.getX() - seekDownX) < touchSlop) {
+                        SeekBar sb = (SeekBar) v;
+                        int available = sb.getWidth() - sb.getPaddingLeft() - sb.getPaddingRight();
+                        Player p = getCurrentPlayer();
+                        if (available > 0 && p != null) {
+                            float fraction = Math.max(0f, Math.min(1f,
+                                    (event.getX() - sb.getPaddingLeft()) / available));
+                            sb.setProgress(Math.round(fraction * sb.getMax()));
+                            long duration = p.getDuration();
+                            if (duration > 0) {
+                                p.seekTo(Math.round(fraction * duration));
+                                updateTimeLabels();
+                            }
+                            resetAutoHide();
+                        }
+                    }
+                    seekDownX = -1f;
+                    break;
+            }
+            return false;
         });
     }
 
@@ -325,28 +580,85 @@ public class PlayerExoActivity extends AppCompatActivity {
             return true;
         }
 
-        showControls();
         return false;
     }
 
-    private void togglePlayPause() {
-        if (player == null) return;
-        if (player.getPlayWhenReady()) {
-            player.pause();
+    /** Detecta toques "vacíos" a nivel de Activity: si ningún control consumió el
+     *  evento, un toque simple muestra/oculta los controles. Robusto ante la capa
+     *  de vídeo (SurfaceView) que en algunos dispositivos no entrega el toque a
+     *  las vistas internas del overlay. */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        boolean handled = super.dispatchTouchEvent(ev);
+        if (ev != null && !handled && ev.getActionMasked() == MotionEvent.ACTION_UP) {
+            handleBackgroundTap(ev.getRawX(), ev.getRawY());
+        }
+        return handled;
+    }
+
+    private void handleBackgroundTap(float rawX, float rawY) {
+        if (controlsLocked || isPointInView(seekBar, rawX, rawY)) {
+            return;
+        }
+        if (controlsVisible) {
+            Player p = getCurrentPlayer();
+            if (p != null && p.getPlayWhenReady()) {
+                hideControls();
+            }
         } else {
-            player.play();
+            showControls();
+        }
+    }
+
+    private boolean isPointInView(View view, float rawX, float rawY) {
+        if (view == null || view.getVisibility() != View.VISIBLE) {
+            return false;
+        }
+        int[] location = new int[2];
+        view.getLocationOnScreen(location);
+        return rawX >= location[0] && rawX <= location[0] + view.getWidth()
+                && rawY >= location[1] && rawY <= location[1] + view.getHeight();
+    }
+
+    private void updateLiveUi(boolean isLive) {
+        this.isLiveStream = isLive;
+        if (liveBadge != null) {
+            liveBadge.setVisibility(isLive ? View.VISIBLE : View.GONE);
+        }
+        if (seekbarContainer != null) {
+            seekbarContainer.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        }
+        if (llSkipBack != null) {
+            llSkipBack.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        }
+        if (llSkipForward != null) {
+            llSkipForward.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        }
+        if (flSubtitles != null && isLive) {
+            flSubtitles.setVisibility(View.GONE);
+        }
+    }
+
+    private void togglePlayPause() {
+        Player p = getCurrentPlayer();
+        if (p == null) return;
+        if (p.getPlayWhenReady()) {
+            p.pause();
+        } else {
+            p.play();
         }
         updatePlayPauseIcons();
         resetAutoHide();
     }
 
     private void skip(long deltaMs) {
-        if (player == null) return;
-        long newPos = player.getCurrentPosition() + deltaMs;
-        long duration = player.getDuration();
+        Player p = getCurrentPlayer();
+        if (p == null) return;
+        long newPos = p.getCurrentPosition() + deltaMs;
+        long duration = p.getDuration();
         if (newPos < 0) newPos = 0;
         if (duration > 0 && newPos > duration) newPos = duration;
-        player.seekTo(newPos);
+        p.seekTo(newPos);
         updateSeekBar();
         updateTimeLabels();
         resetAutoHide();
@@ -363,33 +675,22 @@ public class PlayerExoActivity extends AppCompatActivity {
     }
 
     private void toggleFullscreen() {
-        WindowInsetsControllerCompat controller =
-                WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-        if (controller != null) {
-            int bars = WindowInsetsCompat.Type.statusBars() | WindowInsetsCompat.Type.navigationBars();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                if (controller.getSystemBarsBehavior() ==
-                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE) {
-                    controller.show(bars);
-                    controller.setSystemBarsBehavior(
-                            WindowInsetsControllerCompat.BEHAVIOR_SHOW_BARS_BY_TOUCH);
-                } else {
-                    controller.hide(bars);
-                    controller.setSystemBarsBehavior(
-                            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                }
+        if (playerView != null) {
+            if (currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT) {
+                currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
+                playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FILL);
+                Toast.makeText(this, "Escalar: Rellenar pantalla", Toast.LENGTH_SHORT).show();
+            } else if (currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) {
+                currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+                playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
+                Toast.makeText(this, "Escalar: Zoom", Toast.LENGTH_SHORT).show();
             } else {
-                int uiOptions = getWindow().getDecorView().getSystemUiVisibility();
-                if ((uiOptions & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) != 0) {
-                    getWindow().getDecorView().setSystemUiVisibility(
-                            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
-                } else {
-                    enterImmersiveMode();
-                }
+                currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+                Toast.makeText(this, "Escalar: Ajustar a pantalla (Original)", Toast.LENGTH_SHORT).show();
             }
         }
+        enterImmersiveMode();
         resetAutoHide();
     }
 
@@ -397,12 +698,36 @@ public class PlayerExoActivity extends AppCompatActivity {
     private void showControls() {
         if (controlsLocked) return;
         controlsVisible = true;
+        float slide = 10f * getResources().getDisplayMetrics().density;
+
         controlOverlay.setVisibility(View.VISIBLE);
         controlOverlay.setAlpha(0f);
-        controlOverlay.animate().alpha(1f).setDuration(200).start();
+        controlOverlay.animate().alpha(1f).setDuration(220).start();
+
+        if (topBar != null) {
+            topBar.setVisibility(View.VISIBLE);
+            topBar.setTranslationY(-slide);
+            topBar.setAlpha(0f);
+            topBar.animate().translationY(0f).alpha(1f).setDuration(220).start();
+        }
+        if (bottomBar != null) {
+            bottomBar.setVisibility(View.VISIBLE);
+            bottomBar.setTranslationY(slide);
+            bottomBar.setAlpha(0f);
+            bottomBar.animate().translationY(0f).alpha(1f).setDuration(220).start();
+        }
+        if (centerControls != null) {
+            centerControls.setVisibility(View.VISIBLE);
+            centerControls.setScaleX(0.92f);
+            centerControls.setScaleY(0.92f);
+            centerControls.setAlpha(0f);
+            centerControls.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(220).start();
+        }
+
         startPositionUpdater();
         cancelAutoHide();
-        if (player != null && player.getPlayWhenReady()) {
+        Player p = getCurrentPlayer();
+        if (p != null && p.getPlayWhenReady()) {
             resetAutoHide();
         }
     }
@@ -411,7 +736,7 @@ public class PlayerExoActivity extends AppCompatActivity {
         controlsVisible = false;
         controlOverlay.animate()
                 .alpha(0f)
-                .setDuration(300)
+                .setDuration(280)
                 .withEndAction(() -> {
                     if (!controlsVisible) {
                         controlOverlay.setVisibility(View.GONE);
@@ -424,7 +749,8 @@ public class PlayerExoActivity extends AppCompatActivity {
     private void toggleControls() {
         if (controlsLocked) return;
         if (controlsVisible) {
-            if (player != null && player.getPlayWhenReady()) {
+            Player p = getCurrentPlayer();
+            if (p != null && p.getPlayWhenReady()) {
                 hideControls();
             }
         } else {
@@ -436,7 +762,8 @@ public class PlayerExoActivity extends AppCompatActivity {
 
     private void resetAutoHide() {
         cancelAutoHide();
-        if (controlsVisible && !controlsLocked && player != null && player.getPlayWhenReady()) {
+        Player p = getCurrentPlayer();
+        if (controlsVisible && !controlsLocked && p != null && p.getPlayWhenReady()) {
             mainHandler.postDelayed(autoHideRunnable, CONTROLS_AUTO_HIDE_MS);
         }
     }
@@ -446,12 +773,10 @@ public class PlayerExoActivity extends AppCompatActivity {
     }
 
     private void updatePlayPauseIcons() {
-        boolean playing = player != null && player.getPlayWhenReady();
+        Player p = getCurrentPlayer();
+        boolean playing = p != null && p.getPlayWhenReady();
         int iconRes = playing ? R.drawable.ic_pause : R.drawable.ic_play;
         btnPlayCenter.setImageResource(iconRes);
-        if (btnPlaySmall != null) {
-            btnPlaySmall.setImageResource(iconRes);
-        }
     }
 
     private void updateLockIcon() {
@@ -459,9 +784,10 @@ public class PlayerExoActivity extends AppCompatActivity {
     }
 
     private void updateSeekBar() {
-        if (player == null || seekBar == null) return;
-        long duration = player.getDuration();
-        long position = player.getCurrentPosition();
+        Player p = getCurrentPlayer();
+        if (p == null || seekBar == null) return;
+        long duration = p.getDuration();
+        long position = p.getCurrentPosition();
         if (duration > 0) {
             int progress = (int) (position * seekBar.getMax() / duration);
             seekBar.setProgress(progress);
@@ -469,9 +795,10 @@ public class PlayerExoActivity extends AppCompatActivity {
     }
 
     private void updateTimeLabels() {
-        if (player == null) return;
-        long position = player.getCurrentPosition();
-        long duration = player.getDuration();
+        Player p = getCurrentPlayer();
+        if (p == null) return;
+        long position = p.getCurrentPosition();
+        long duration = p.getDuration();
         tvCurrentTime.setText(formatTime(position));
         tvDuration.setText(formatTime(duration));
     }
@@ -479,7 +806,7 @@ public class PlayerExoActivity extends AppCompatActivity {
     private final Runnable positionUpdateRunnable = new Runnable() {
         @Override
         public void run() {
-            if (controlsVisible && player != null) {
+            if (controlsVisible && getCurrentPlayer() != null) {
                 updateSeekBar();
                 updateTimeLabels();
                 mainHandler.postDelayed(this, 250);
@@ -602,29 +929,6 @@ public class PlayerExoActivity extends AppCompatActivity {
         builder.show();
     }
 
-    private void showSpeedSelector() {
-        if (player == null) return;
-        final float[] speeds = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
-        String[] labels = {"0.5x", "0.75x", "Normal", "1.25x", "1.5x", "1.75x", "2x"};
-        float current = player.getPlaybackParameters().speed;
-        int checked = 2;
-        for (int i = 0; i < speeds.length; i++) {
-            if (Math.abs(current - speeds[i]) < 0.01f) {
-                checked = i;
-                break;
-            }
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Velocidad")
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    player.setPlaybackSpeed(speeds[which]);
-                    resetAutoHide();
-                    dialog.dismiss();
-                })
-                .setNegativeButton("Cerrar", null)
-                .show();
-    }
-
     private static class TrackOption {
         final String label;
         final int groupIndex;
@@ -703,7 +1007,7 @@ public class PlayerExoActivity extends AppCompatActivity {
     // --- Player setup (unchanged from original) ---
 
     private void setupPlayer() {
-        httpDataSourceFactory = PlaybackCacheHelper.newHttpDataSourceFactory(null);
+        httpDataSourceFactory = PlaybackCacheHelper.newHttpDataSourceFactory(this, null);
         cacheDataSourceFactory = disableCache
             ? null
             : PlaybackCacheHelper.newCacheDataSourceFactory(this, httpDataSourceFactory);
@@ -735,6 +1039,8 @@ public class PlayerExoActivity extends AppCompatActivity {
                 }
                 if (playbackState == Player.STATE_READY) {
                     scheduleVideoWatchdog();
+                    boolean live = isLiveStream || (player != null && player.isCurrentMediaItemLive());
+                    updateLiveUi(live);
                     updateTimeLabels();
                     if (controlsVisible) {
                         resetAutoHide();
@@ -744,6 +1050,20 @@ public class PlayerExoActivity extends AppCompatActivity {
                 }
                 if (playbackState == Player.STATE_ENDED) {
                     onContentEnded();
+                }
+            }
+
+            @Override
+            public void onTracksChanged(@NonNull Tracks tracks) {
+                if (!isLiveStream && flSubtitles != null) {
+                    boolean hasSubtitles = false;
+                    for (Tracks.Group group : tracks.getGroups()) {
+                        if (group.getType() == C.TRACK_TYPE_TEXT) {
+                            hasSubtitles = true;
+                            break;
+                        }
+                    }
+                    flSubtitles.setVisibility(hasSubtitles ? View.VISIBLE : View.GONE);
                 }
             }
 
@@ -814,6 +1134,11 @@ public class PlayerExoActivity extends AppCompatActivity {
             resumePositionMs = 0;
         }
 
+        if (isCasting && castPlayer != null) {
+            castPlayer.setMediaItem(mediaItem);
+            castPlayer.prepare();
+        }
+
         startProgressSaver();
     }
 
@@ -826,7 +1151,224 @@ public class PlayerExoActivity extends AppCompatActivity {
             saveProgressNow();
             ContinueWatchingStore.markCompleted(this, contentId);
         }
+
+        if (isSeriesEpisodePlayback() && nextEpisodeInfo != null) {
+            playNextEpisode(true);
+            return;
+        }
+
         showControls();
+    }
+
+    private boolean isSeriesEpisodePlayback() {
+        return episodeId > 0 && postId > 0;
+    }
+
+    private void preloadSeasonData() {
+        if (!isSeriesEpisodePlayback() || loadingSeasonData || seasonPreloadAttempted) {
+            return;
+        }
+        seasonPreloadAttempted = true;
+        loadingSeasonData = true;
+        new Thread(() -> {
+            try {
+                String postType = (mediaType == null || mediaType.trim().isEmpty()) ? "tvshows" : mediaType;
+                AllCalidadScraper.hit(postId, postType);
+                List<AllCalidadScraper.Season> fetchedSeasons = AllCalidadScraper.getSeasons(postId);
+
+                runOnUiThread(() -> {
+                    loadingSeasonData = false;
+                    seasonCache.clear();
+                    if (fetchedSeasons != null) {
+                        seasonCache.addAll(fetchedSeasons);
+                    }
+                    nextEpisodeInfo = findNextEpisodeFromCache();
+                });
+            } catch (Exception ignored) {
+                runOnUiThread(() -> loadingSeasonData = false);
+            }
+        }).start();
+    }
+
+    private NextEpisodeInfo findNextEpisodeFromCache() {
+        if (seasonCache.isEmpty()) return null;
+
+        boolean foundCurrent = false;
+        for (AllCalidadScraper.Season season : seasonCache) {
+            if (season == null || season.episodes == null) continue;
+            int sNum = season.seasonNumber > 0 ? season.seasonNumber : 1;
+            for (AllCalidadScraper.Episode ep : season.episodes) {
+                if (ep == null || ep.id <= 0) continue;
+                int eNum = ep.episodeNumber > 0 ? ep.episodeNumber : 1;
+
+                if (foundCurrent) {
+                    return new NextEpisodeInfo(ep.id, sNum, eNum, ep.title);
+                }
+
+                if (ep.id == episodeId || (sNum == seasonNumber && eNum == episodeNumber)) {
+                    seasonNumber = sNum;
+                    episodeNumber = eNum;
+                    foundCurrent = true;
+                }
+            }
+        }
+
+        for (AllCalidadScraper.Season season : seasonCache) {
+            if (season == null || season.episodes == null) continue;
+            int sNum = season.seasonNumber > 0 ? season.seasonNumber : 1;
+            for (AllCalidadScraper.Episode ep : season.episodes) {
+                if (ep == null || ep.id <= 0) continue;
+                int eNum = ep.episodeNumber > 0 ? ep.episodeNumber : 1;
+                boolean comesAfter = sNum > seasonNumber || (sNum == seasonNumber && eNum > episodeNumber);
+                if (comesAfter) {
+                    return new NextEpisodeInfo(ep.id, sNum, eNum, ep.title);
+                }
+            }
+        }
+        return null;
+    }
+
+    private final Runnable seriesNextMonitorRunnable = new Runnable() {
+        @Override
+        public void run() {
+            checkSeriesNextEpisodeTrigger();
+            if (!contentEnded && !isDestroyed() && !isFinishing()) {
+                mainHandler.postDelayed(this, 1500L);
+            }
+        }
+    };
+
+    private void startSeriesNextMonitor() {
+        if (!isSeriesEpisodePlayback()) return;
+        mainHandler.removeCallbacks(seriesNextMonitorRunnable);
+        mainHandler.post(seriesNextMonitorRunnable);
+    }
+
+    private void checkSeriesNextEpisodeTrigger() {
+        if (!isSeriesEpisodePlayback() || btnNextEpisode == null || isTransitioningToNextEpisode || contentEnded) {
+            return;
+        }
+        if (nextEpisodeInfo == null && !loadingSeasonData && !seasonPreloadAttempted) {
+            preloadSeasonData();
+        }
+        if (nextEpisodeInfo == null) {
+            if (btnNextEpisode.getVisibility() == View.VISIBLE) {
+                btnNextEpisode.setVisibility(View.GONE);
+            }
+            return;
+        }
+
+        Player p = getCurrentPlayer();
+        if (p == null) return;
+        long duration = p.getDuration();
+        long position = p.getCurrentPosition();
+        if (duration <= 0 || position <= 0) return;
+
+        long remainingMs = duration - position;
+        // 5 minutos = 300,000 ms
+        if (remainingMs <= 300_000L && remainingMs > 1500L) {
+            String code = String.format(Locale.US, "T%d:E%d", nextEpisodeInfo.seasonNumber, nextEpisodeInfo.episodeNumber);
+            if (remainingMs <= 30_000L) {
+                int sec = (int) Math.ceil(remainingMs / 1000.0);
+                btnNextEpisode.setText("Siguiente episodio (" + sec + "s)");
+            } else {
+                btnNextEpisode.setText("Siguiente episodio • " + code);
+            }
+            if (btnNextEpisode.getVisibility() != View.VISIBLE) {
+                btnNextEpisode.setVisibility(View.VISIBLE);
+                btnNextEpisode.setAlpha(0f);
+                btnNextEpisode.animate().alpha(1f).setDuration(180L).start();
+            }
+        } else if (remainingMs > 315_000L && btnNextEpisode.getVisibility() == View.VISIBLE) {
+            btnNextEpisode.setVisibility(View.GONE);
+        }
+    }
+
+    private void playNextEpisode(boolean automatic) {
+        if (nextEpisodeInfo == null) {
+            if (!automatic) {
+                Toast.makeText(this, "Ya estás en el último episodio disponible", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+        if (isTransitioningToNextEpisode) return;
+        isTransitioningToNextEpisode = true;
+        if (btnNextEpisode != null) {
+            btnNextEpisode.setVisibility(View.GONE);
+        }
+        progressBar.setVisibility(View.VISIBLE);
+
+        final NextEpisodeInfo target = nextEpisodeInfo;
+        String code = String.format(Locale.US, "T%d:E%d", target.seasonNumber, target.episodeNumber);
+        Toast.makeText(this, "Cargando " + code + "...", Toast.LENGTH_SHORT).show();
+
+        new Thread(() -> {
+            try {
+                AllCalidadScraper.hit(target.episodeId, "episodes");
+                AllCalidadScraper.PlayerData playerData = AllCalidadScraper.getPlayer(target.episodeId);
+                List<String> rawUrls = AllCalidadScraper.getPlayableUrls(playerData);
+
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (rawUrls == null || rawUrls.isEmpty()) {
+                        isTransitioningToNextEpisode = false;
+                        progressBar.setVisibility(View.GONE);
+                        Toast.makeText(this, "No se pudo cargar el siguiente episodio", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    ArrayList<String> directUrls = new ArrayList<>();
+                    for (String u : rawUrls) {
+                        if (u != null && (u.contains(".m3u8") || u.contains(".mp4"))) {
+                            directUrls.add(u.trim());
+                        }
+                    }
+
+                    if (!directUrls.isEmpty()) {
+                        urls.clear();
+                        urls.addAll(directUrls);
+                        currentUrlIndex = 0;
+                        episodeId = target.episodeId;
+                        seasonNumber = target.seasonNumber;
+                        episodeNumber = target.episodeNumber;
+                        contentId = postId + "_" + episodeId;
+                        playbackTitle = seriesTitle + " - " + code;
+                        setTitle(playbackTitle);
+                        if (tvTitle != null) tvTitle.setText(playbackTitle);
+                        resumePositionMs = 0L;
+                        contentEnded = false;
+                        isTransitioningToNextEpisode = false;
+                        nextEpisodeInfo = null;
+                        seasonPreloadAttempted = false;
+
+                        playCurrentUrl();
+                        preloadSeasonData();
+                    } else {
+                        Intent webIntent = PlayerContenidoActivity.createEpisodeIntent(
+                                this,
+                                new ArrayList<>(rawUrls),
+                                seriesTitle + " - " + code,
+                                seriesTitle,
+                                postId,
+                                mediaType,
+                                target.episodeId,
+                                target.seasonNumber,
+                                target.episodeNumber
+                        );
+                        webIntent.putExtra("resume_position_ms", 0L);
+                        webIntent.putExtra("image_url", imageUrl);
+                        startActivity(webIntent);
+                        finish();
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    isTransitioningToNextEpisode = false;
+                    progressBar.setVisibility(View.GONE);
+                    Toast.makeText(this, "Error cargando siguiente episodio", Toast.LENGTH_SHORT).show();
+                });
+            }
+        }).start();
     }
 
     private void startProgressSaver() {
@@ -851,10 +1393,12 @@ public class PlayerExoActivity extends AppCompatActivity {
     };
 
     private void saveProgressNow() {
-        if (player == null || contentId == null || contentId.isEmpty()) return;
-        long positionMs = player.getCurrentPosition();
-        long durationMs = player.getDuration();
-        if (positionMs <= 0 || durationMs <= 0) return;
+        Player p = getCurrentPlayer();
+        if (p == null || contentId == null || contentId.isEmpty()) return;
+        long positionMs = p.getCurrentPosition();
+        long durationMs = p.getDuration();
+        if (positionMs <= 0) return;
+        if (durationMs < 0) durationMs = 0;
 
         ContinueWatchingItem item = new ContinueWatchingItem();
         item.setContentId(contentId);
@@ -868,11 +1412,17 @@ public class PlayerExoActivity extends AppCompatActivity {
         item.setEpisodeNumber(episodeNumber);
         item.setPositionMs(positionMs);
         item.setDurationMs(durationMs);
-        int pct = (int) (positionMs * 100 / durationMs);
+        int pct = durationMs > 0 ? (int) (positionMs * 100 / durationMs) : 0;
         item.setProgressPercent(Math.min(99, pct));
         item.setCompleted(false);
 
-        ContinueWatchingStore.save(this, item);
+        final ContinueWatchingItem itemToSave = item;
+        saveExecutor.execute(() -> {
+            try {
+                ContinueWatchingStore.save(PlayerExoActivity.this, itemToSave);
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     private void tryNextStream() {
@@ -906,53 +1456,61 @@ public class PlayerExoActivity extends AppCompatActivity {
         if (origin != null && !headers.containsKey("Origin")) {
             headers.put("Origin", origin);
         }
+        String cookies = cookiesFor(url);
+        if (cookies != null && !cookies.isEmpty() && !headers.containsKey("Cookie")) {
+            headers.put("Cookie", cookies);
+        }
         return headers;
+    }
+
+    private String cookiesFor(String url) {
+        try {
+            android.webkit.CookieManager manager = android.webkit.CookieManager.getInstance();
+            if (manager == null) {
+                return null;
+            }
+            return manager.getCookie(url);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void scheduleVideoWatchdog() {
         if (videoWatchdogScheduled || player == null) {
             return;
         }
-        if (videoRenderedForCurrentUrl) {
-            return;
-        }
         videoWatchdogScheduled = true;
-        final int generation = videoWatchdogGeneration;
+        final long generation = videoWatchdogGeneration;
         mainHandler.postDelayed(() -> {
-            if (player == null || generation != videoWatchdogGeneration) {
-                return;
-            }
-            if (videoRenderedForCurrentUrl) {
+            videoWatchdogScheduled = false;
+            if (player == null || generation != videoWatchdogGeneration || videoRenderedForCurrentUrl) {
                 return;
             }
             int state = player.getPlaybackState();
-            if (state == Player.STATE_READY && player.getPlayWhenReady()) {
-                if (audioSessionStartedForCurrentUrl) {
+            if (state == Player.STATE_READY) {
+                if (player.isPlaying()) {
                     mainHandler.postDelayed(() -> {
-                        if (player == null || generation != videoWatchdogGeneration) return;
-                        if (videoRenderedForCurrentUrl) return;
-                        if (audioSessionStartedForCurrentUrl) {
-                            Toast.makeText(this, "Stream solo audio. Probando otra fuente.", Toast.LENGTH_SHORT).show();
-                        } else {
+                        if (player == null || generation != videoWatchdogGeneration || videoRenderedForCurrentUrl) return;
+                        if (!isFinishing()) {
                             Toast.makeText(this, "Este stream no entrega video. Probando otra fuente.", Toast.LENGTH_SHORT).show();
                         }
                         tryNextStream();
-                    }, 5_000L);
+                    }, 10_000L);
                 } else {
                     mainHandler.postDelayed(() -> {
                         if (player == null || generation != videoWatchdogGeneration || videoRenderedForCurrentUrl) return;
                         Toast.makeText(this, "Stream sin respuesta. Probando otra fuente.", Toast.LENGTH_SHORT).show();
                         tryNextStream();
-                    }, 5_000L);
+                    }, 10_000L);
                 }
             } else if (state == Player.STATE_BUFFERING) {
                 mainHandler.postDelayed(() -> {
                     if (player == null || generation != videoWatchdogGeneration || videoRenderedForCurrentUrl) return;
-                    if (player.getPlaybackState() == Player.STATE_BUFFERING) {
+                    if (!isFinishing()) {
                         Toast.makeText(this, "Stream lento. Probando otra fuente.", Toast.LENGTH_SHORT).show();
                         tryNextStream();
                     }
-                }, 5_000L);
+                }, 10_000L);
             }
         }, VIDEO_WATCHDOG_MS);
     }
@@ -962,7 +1520,20 @@ public class PlayerExoActivity extends AppCompatActivity {
         if (embedUrl == null) {
             return false;
         }
-        FootballWebPlayerActivity.start(this, embedUrl, fallbackReferer, playbackTitle, false);
+        long resumeMs = 0L;
+        Player p = getCurrentPlayer();
+        if (p != null) {
+            resumeMs = p.getCurrentPosition();
+        }
+        ArrayList<String> urls = new ArrayList<>();
+        urls.add(embedUrl);
+        Intent intent = PlayerContenidoActivity.createFullIntent(this, urls, playbackTitle,
+                seriesTitle, postId, mediaType,
+                episodeId, seasonNumber, episodeNumber,
+                imageUrl, resumeMs);
+        intent.putExtra("disable_exo_switch", true);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
         finish();
         return true;
     }
@@ -983,19 +1554,31 @@ public class PlayerExoActivity extends AppCompatActivity {
         }
     }
 
+    private void finishPlayer() {
+        finish();
+        overridePendingTransition(0, android.R.anim.fade_out);
+    }
+
+    @Override
+    public void onBackPressed() {
+        finishPlayer();
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         enterImmersiveMode();
-        if (player != null) {
-            player.play();
+        Player p = getCurrentPlayer();
+        if (p != null) {
+            p.play();
         }
     }
 
     @Override
     protected void onPause() {
-        if (player != null) {
-            player.pause();
+        Player p = getCurrentPlayer();
+        if (p != null) {
+            p.pause();
         }
         saveProgressNow();
         super.onPause();
@@ -1010,14 +1593,30 @@ public class PlayerExoActivity extends AppCompatActivity {
         saveProgressNow();
         mainHandler.removeCallbacksAndMessages(null);
         PlaybackCacheHelper.cancelPreload();
+        if (castContext != null && castStateListener != null) {
+            castContext.removeCastStateListener(castStateListener);
+            castStateListener = null;
+        }
+        if (castPlayer != null) {
+            castPlayer.release();
+            castPlayer = null;
+        }
         if (player != null) {
             player.release();
             player = null;
         }
+        saveExecutor.shutdown();
         super.onDestroy();
     }
 
     private void enterImmersiveMode() {
+        getWindow().setNavigationBarColor(android.graphics.Color.BLACK);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            getWindow().setNavigationBarDividerColor(android.graphics.Color.BLACK);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());

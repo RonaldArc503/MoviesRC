@@ -57,6 +57,10 @@ public class SmartScraperEngine {
         // Fallback: route through the multi-source resolver with cache + priority
         try {
             MediaItem fallbackItem = new MediaItem(request.title, "", "", "", 0);
+            fallbackItem.setMediaType(request.mediaType);
+            fallbackItem.setDetailUrl(request.detailUrl != null ? request.detailUrl : "");
+            fallbackItem.setTmdbId(request.tmdbId);
+            fallbackItem.setImdbId(request.imdbId);
             SourceRouter router = new SourceRouter(context, SourceRegistry.getInstance());
             SmartPlaybackResult fallback = request.isEpisodeRequest()
                     ? router.resolveEpisode(context, fallbackItem, request.seasonNumber, request.episodeNumber)
@@ -99,6 +103,7 @@ public class SmartScraperEngine {
 
         SmartPlaybackRequest request = new SmartPlaybackRequest();
         request.title = item.getTitulo();
+        request.detailUrl = item.getDetailUrl();
         request.tmdbId = item.getTmdbId();
         request.imdbId = item.getImdbId();
         request.postId = Math.max(0, item.getPostId());
@@ -107,10 +112,6 @@ public class SmartScraperEngine {
         request.contentType = detectContentType(item);
         request.seasonNumber = season > 0 ? season : 1;
         request.episodeNumber = episode > 0 ? episode : 1;
-
-        if (request.postId <= 0) {
-            return null;
-        }
 
         return request;
     }

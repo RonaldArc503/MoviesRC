@@ -2,6 +2,7 @@ package sv.edu.catolica.rex.network.smart;
 
 public class SmartPlaybackRequest {
     public String title;
+    public String detailUrl;
     public int tmdbId;
     public String imdbId;
     public int postId;
@@ -16,9 +17,17 @@ public class SmartPlaybackRequest {
     }
 
     public String cacheKey() {
-        String imdb = imdbId == null ? "" : imdbId.trim();
+        String identity;
+        if (postId > 0) {
+            identity = "P" + postId + (episodePostId > 0 ? "_E" + episodePostId : "");
+        } else if (tmdbId > 0) {
+            identity = "T" + tmdbId;
+        } else {
+            String t = title == null ? "" : title.trim().toLowerCase();
+            identity = "N" + (t.isEmpty() ? "unknown" : t);
+        }
         return (contentType != null ? contentType.name() : "UNKNOWN")
-                + "|" + imdb
+                + "|" + identity
                 + "|S" + seasonNumber
                 + "|E" + episodeNumber;
     }

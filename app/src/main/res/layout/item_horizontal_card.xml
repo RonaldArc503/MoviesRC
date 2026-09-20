@@ -62,21 +62,27 @@
         </FrameLayout>
 
         <!-- ── BARRA DE PROGRESO (roja, estilo Netflix) ── -->
-        <!-- Fondo gris de la barra -->
-        <View
-            android:id="@+id/progress_bg"
+        <FrameLayout
+            android:id="@+id/progress_container"
             android:layout_width="match_parent"
             android:layout_height="3dp"
-            android:background="#2A2D38"
-            android:visibility="gone" />
+            android:visibility="gone">
 
-        <!-- Relleno rojo (ancho se setea programáticamente) -->
-        <View
-            android:id="@+id/progress_fg"
-            android:layout_width="0dp"
-            android:layout_height="3dp"
-            android:background="#E63540"
-            android:visibility="gone" />
+            <!-- Fondo gris de la barra -->
+            <View
+                android:id="@+id/progress_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="#2A2D38" />
+
+            <!-- Relleno rojo (ancho se setea programáticamente) -->
+            <View
+                android:id="@+id/progress_fg"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_gravity="start"
+                android:background="#E63540" />
+        </FrameLayout>
 
         <!-- ── ZONA DE TEXTO ── -->
         <LinearLayout

@@ -37,6 +37,13 @@ public class TmdbService {
     /** Número de hilos para enriquecimiento paralelo */
     private static final int TMDB_THREAD_COUNT = 4;
 
+    /** Se marca como true cuando TMDB responde 401 (API key inválida/revocada). */
+    private static volatile boolean tmdbKeyInvalid = false;
+
+    public static boolean isTmdbKeyInvalid() {
+        return tmdbKeyInvalid;
+    }
+
     private static class TmdbResult {
         String posterUrl;
         String overview;
@@ -352,7 +359,11 @@ public class TmdbService {
         }
 
         try {
-            String url = API_BASE + path + "?api_key="
+            // Si el path ya trae query string (p. ej. /discover/movie?sort_by=...),
+            // concatenar la api_key con "&" en lugar de "?" (si no, TMDB devuelve 401
+            // porque la key queda anidada en el valor de otro parámetro).
+            String sep = path.contains("?") ? "&" : "?";
+            String url = API_BASE + path + sep + "api_key="
                     + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8")
                     + "&language=es-ES&page=1";
             JSONObject root = new JSONObject(httpGet(url));
@@ -651,6 +662,9 @@ public class TmdbService {
             int responseCode = conn.getResponseCode();
             long retryAfterMs = parseRetryAfterMs(conn.getHeaderField("Retry-After"));
             RequestGuard.onResponse(urlString, responseCode, retryAfterMs);
+            if (responseCode == 401) {
+                tmdbKeyInvalid = true;
+            }
             if (responseCode >= 400) {
                 throw new HttpStatusException(responseCode, urlString, retryAfterMs);
             }

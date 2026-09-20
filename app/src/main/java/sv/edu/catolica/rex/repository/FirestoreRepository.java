@@ -7,6 +7,7 @@ import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.firestore.CollectionReference;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
@@ -15,6 +16,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.models.FavoriteItem;
@@ -31,6 +34,7 @@ public class FirestoreRepository {
     private static final String FIELD_FAVORITES = "favorites";
     private static final String FIELD_PERSONAL_LISTS = "personalLists";
     private static final String FIELD_SETTINGS = "settings";
+    private static final String FIELD_UPDATED_AT = "updatedAt";
 
     private final FirebaseFirestore firestore;
 
@@ -51,7 +55,7 @@ public class FirestoreRepository {
     }
 
     public Task<Void> saveContinueWatching(String uid, ContinueWatchingItem item) {
-        return userDoc(uid).get().continueWithTask(task -> {
+        return userDoc(uid).get().continueWithTask(RMW_EXECUTOR, task -> {
             List<ContinueWatchingItem> list = new ArrayList<>();
             if (task.isSuccessful() && task.getResult().exists()) {
                 UserData data = task.getResult().toObject(UserData.class);
@@ -70,6 +74,7 @@ public class FirestoreRepository {
             if (!found) list.add(0, item);
             Map<String, Object> updates = new HashMap<>();
             updates.put(FIELD_CONTINUE_WATCHING, list);
+            updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
             return userDoc(uid).set(updates, SetOptions.merge());
         });
     }
@@ -77,11 +82,12 @@ public class FirestoreRepository {
     public Task<Void> setContinueWatchingList(String uid, List<ContinueWatchingItem> list) {
         Map<String, Object> updates = new HashMap<>();
         updates.put(FIELD_CONTINUE_WATCHING, list);
+        updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
         return userDoc(uid).set(updates, SetOptions.merge());
     }
 
     public Task<Void> addToHistory(String uid, WatchedHistoryItem item) {
-        return userDoc(uid).get().continueWithTask(task -> {
+        return userDoc(uid).get().continueWithTask(RMW_EXECUTOR, task -> {
             List<WatchedHistoryItem> list = new ArrayList<>();
             if (task.isSuccessful() && task.getResult().exists()) {
                 UserData data = task.getResult().toObject(UserData.class);
@@ -95,6 +101,7 @@ public class FirestoreRepository {
             }
             Map<String, Object> updates = new HashMap<>();
             updates.put(FIELD_HISTORY, list);
+            updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
             return userDoc(uid).set(updates, SetOptions.merge());
         });
     }
@@ -102,11 +109,12 @@ public class FirestoreRepository {
     public Task<Void> setHistoryList(String uid, List<WatchedHistoryItem> list) {
         Map<String, Object> updates = new HashMap<>();
         updates.put(FIELD_HISTORY, list);
+        updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
         return userDoc(uid).set(updates, SetOptions.merge());
     }
 
     public Task<Void> addFavorite(String uid, FavoriteItem item) {
-        return userDoc(uid).get().continueWithTask(task -> {
+        return userDoc(uid).get().continueWithTask(RMW_EXECUTOR, task -> {
             List<FavoriteItem> list = new ArrayList<>();
             if (task.isSuccessful() && task.getResult().exists()) {
                 UserData data = task.getResult().toObject(UserData.class);
@@ -122,12 +130,13 @@ public class FirestoreRepository {
             list.add(item);
             Map<String, Object> updates = new HashMap<>();
             updates.put(FIELD_FAVORITES, list);
+            updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
             return userDoc(uid).set(updates, SetOptions.merge());
         });
     }
 
     public Task<Void> removeFavorite(String uid, String contentId) {
-        return userDoc(uid).get().continueWithTask(task -> {
+        return userDoc(uid).get().continueWithTask(RMW_EXECUTOR, task -> {
             List<FavoriteItem> updated = new ArrayList<>();
             if (task.isSuccessful() && task.getResult().exists()) {
                 UserData data = task.getResult().toObject(UserData.class);
@@ -141,6 +150,7 @@ public class FirestoreRepository {
             }
             Map<String, Object> updates = new HashMap<>();
             updates.put(FIELD_FAVORITES, updated);
+            updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
             return userDoc(uid).set(updates, SetOptions.merge());
         });
     }
@@ -148,12 +158,14 @@ public class FirestoreRepository {
     public Task<Void> setFavoritesList(String uid, List<FavoriteItem> list) {
         Map<String, Object> updates = new HashMap<>();
         updates.put(FIELD_FAVORITES, list);
+        updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
         return userDoc(uid).set(updates, SetOptions.merge());
     }
 
     public Task<Void> savePersonalList(String uid, PersonalList list) {
         Map<String, Object> updates = new HashMap<>();
         updates.put(FIELD_PERSONAL_LISTS + "." + list.getListId(), list);
+        updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
         return userDoc(uid).set(updates, SetOptions.merge());
     }
 
@@ -161,18 +173,20 @@ public class FirestoreRepository {
         Map<String, Object> updates = new HashMap<>();
         updates.put(FIELD_PERSONAL_LISTS + "." + listId,
                 com.google.firebase.firestore.FieldValue.delete());
+        updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
         return userDoc(uid).set(updates, SetOptions.merge());
     }
 
     public Task<Void> saveSettings(String uid, UserSettings settings) {
         Map<String, Object> updates = new HashMap<>();
         updates.put(FIELD_SETTINGS, settings);
+        updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
         return userDoc(uid).set(updates, SetOptions.merge());
     }
 
     public ListenerRegistration listenUserData(String uid,
                                                final OnUserDataChangedListener listener) {
-        return userDoc(uid).addSnapshotListener((snapshot, error) -> {
+        return userDoc(uid).addSnapshotListener(LISTENER_EXECUTOR, (snapshot, error) -> {
             if (error != null) {
                 listener.onError(error);
                 return;
@@ -183,6 +197,23 @@ public class FirestoreRepository {
             }
         });
     }
+
+    private static final ExecutorService LISTENER_EXECUTOR =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "rex-firestore-listener");
+                thread.setPriority(Thread.NORM_PRIORITY);
+                return thread;
+            });
+
+    /** Executor para las continuaciones read-modify-write (get -> set) de Firestore.
+     *  Separado del listener para evitar deadlock: el callback del snapshot ya ocupa
+     *  LISTENER_EXECUTOR y el sync puede esperar a estas tareas. */
+    private static final ExecutorService RMW_EXECUTOR =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "rex-firestore-rmw");
+                thread.setPriority(Thread.NORM_PRIORITY);
+                return thread;
+            });
 
     public interface OnUserDataChangedListener {
         void onDataChanged(UserData data);

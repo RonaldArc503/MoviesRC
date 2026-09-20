@@ -120,33 +120,51 @@ public class AuthManager {
     }
 
     public void signInWithGoogle(Activity activity) {
-        if (googleSignInClient == null) {
-            GoogleSignInOptions gso = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                    .requestIdToken(getGoogleClientId(activity))
-                    .requestEmail()
-                    .build();
-            googleSignInClient = GoogleSignIn.getClient(activity, gso);
+        try {
+            if (googleSignInClient == null) {
+                GoogleSignInOptions gso = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                        .requestIdToken(getGoogleClientId(activity))
+                        .requestEmail()
+                        .build();
+                googleSignInClient = GoogleSignIn.getClient(activity, gso);
+            }
+            Intent signInIntent = googleSignInClient.getSignInIntent();
+            activity.startActivityForResult(signInIntent, RC_SIGN_IN);
+        } catch (Exception e) {
+            Log.e(TAG, "signInWithGoogle error", e);
         }
-        Intent signInIntent = googleSignInClient.getSignInIntent();
-        activity.startActivityForResult(signInIntent, RC_SIGN_IN);
     }
 
     public void handleGoogleResult(Activity activity, Intent data, AuthCallback callback) {
         Task<GoogleSignInAccount> task = GoogleSignIn.getSignedInAccountFromIntent(data);
         try {
             GoogleSignInAccount account = task.getResult(ApiException.class);
-            if (account != null) {
-                AuthCredential credential = GoogleAuthProvider.getCredential(account.getIdToken(), null);
-                firebaseAuth.signInWithCredential(credential)
-                        .addOnCompleteListener(activity, authTask -> {
-                            if (authTask.isSuccessful()) {
-                                callback.onSuccess(authTask.getResult().getUser());
-                            } else {
-                                callback.onError(authTask.getException());
-                            }
-                        });
+            if (account == null) {
+                callback.onError(new Exception("No se obtuvo cuenta de Google"));
+                return;
             }
+            String idToken = account.getIdToken();
+            if (idToken == null || idToken.isEmpty()) {
+                Log.w(TAG, "Google ID token is null. default_web_client_id=" + getGoogleClientId(activity));
+                callback.onError(new Exception("No se pudo obtener el token de Google (revisa default_web_client_id)"));
+                return;
+            }
+            AuthCredential credential = GoogleAuthProvider.getCredential(idToken, null);
+            firebaseAuth.signInWithCredential(credential)
+                    .addOnCompleteListener(activity, authTask -> {
+                        if (authTask.isSuccessful()) {
+                            callback.onSuccess(authTask.getResult().getUser());
+                        } else {
+                            Log.w(TAG, "signInWithCredential failed", authTask.getException());
+                            callback.onError(authTask.getException());
+                        }
+                    });
         } catch (ApiException e) {
+            // 10 = STATUS_DEVELOPER_ERROR (config), 12500 = ERROR, etc.
+            Log.e(TAG, "Google sign-in API error, status=" + e.getStatusCode(), e);
+            callback.onError(e);
+        } catch (Exception e) {
+            Log.e(TAG, "handleGoogleResult error", e);
             callback.onError(e);
         }
     }
@@ -158,12 +176,27 @@ public class AuthManager {
         }
     }
 
+    public void sendPasswordReset(String email, final AuthCallback callback) {
+        if (email == null || email.trim().isEmpty()) {
+            if (callback != null) callback.onError(new Exception("Ingresa tu correo electrónico"));
+            return;
+        }
+        firebaseAuth.sendPasswordResetEmail(email.trim())
+                .addOnCompleteListener(task -> {
+                    if (task.isSuccessful()) {
+                        if (callback != null) callback.onSuccess(firebaseAuth.getCurrentUser());
+                    } else if (callback != null) {
+                        callback.onError(task.getException());
+                    }
+                });
+    }
+
     public interface AuthCallback {
         void onSuccess(FirebaseUser user);
         void onError(Exception e);
     }
 
-    private String getGoogleClientId(Activity activity) {
+    public String getGoogleClientId(Activity activity) {
         try {
             int id = activity.getResources().getIdentifier(
                     "default_web_client_id", "string", activity.getPackageName());

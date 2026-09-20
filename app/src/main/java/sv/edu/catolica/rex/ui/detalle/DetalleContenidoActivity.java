@@ -1,307 +1,34 @@
 package sv.edu.catolica.rex.ui.detalle;
 
+import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
-import android.view.View;
-import android.widget.Button;
-import android.widget.ImageView;
-import android.widget.TextView;
-import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
-import com.bumptech.glide.Glide;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import sv.edu.catolica.rex.R;
-import sv.edu.catolica.rex.models.MediaItem;
-import sv.edu.catolica.rex.network.AllCalidadScraper;
-import sv.edu.catolica.rex.network.TmdbService;
-import sv.edu.catolica.rex.network.smart.SmartScraperEngine;
-import sv.edu.catolica.rex.ui.player.PlayerContenidoActivity;
 
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+
+import sv.edu.catolica.rex.models.MediaItem;
+
+/**
+ * Delegador al detalle rediseñado (HBOMax). Se mantiene por compatibilidad con
+ * el manifest; toda apertura redirige a {@link DetalleActivity} con el diseño nuevo.
+ */
 public class DetalleContenidoActivity extends AppCompatActivity {
 
     public static final String EXTRA_MEDIA_ITEM = "media_item";
 
-    private ImageView ivPoster;
-    private TextView tvTitle, tvYear, tvSynopsis, tvEpisodesTitle;
-    private RecyclerView rvEpisodes;
-    private Button btnPlay;
-    private MediaItem mediaItem;
-    private ArrayList<String> playUrls = new ArrayList<>();
-    private final List<AllCalidadScraper.Season> seasonItems = new ArrayList<>();
-    private final SmartScraperEngine smartScraperEngine = new SmartScraperEngine();
-    private EpisodeAdapter episodeAdapter;
-    private boolean isSeriesContent = false;
-    private AllCalidadScraper.Episode firstSeriesEpisode;
-
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_detalle_contenido);
-
-        ivPoster = findViewById(R.id.iv_poster);
-        tvTitle = findViewById(R.id.tv_title);
-        tvYear = findViewById(R.id.tv_year);
-        tvSynopsis = findViewById(R.id.tv_synopsis);
-        tvEpisodesTitle = findViewById(R.id.tv_episodes_title);
-        rvEpisodes = findViewById(R.id.rv_episodes);
-        btnPlay = findViewById(R.id.btn_play);
-
-        rvEpisodes.setLayoutManager(new LinearLayoutManager(this));
-        episodeAdapter = new EpisodeAdapter(this::loadEpisodeServers, rvEpisodes);
-        rvEpisodes.setAdapter(episodeAdapter);
-
-        mediaItem = (MediaItem) getIntent().getSerializableExtra(EXTRA_MEDIA_ITEM);
-        if (mediaItem == null) {
-            Toast.makeText(this, "Error: no se recibió información", Toast.LENGTH_SHORT).show();
-            finish();
-            return;
+        MediaItem item = (MediaItem) getIntent().getSerializableExtra(EXTRA_MEDIA_ITEM);
+        if (item != null) {
+            DetalleActivity.start(this, item);
         }
-
-        tvTitle.setText(mediaItem.getTitulo());
-        tvYear.setText(mediaItem.getAnio());
-        Glide.with(this)
-            .load(mediaItem.getImagen())
-            .placeholder(R.drawable.placeholder_poster)
-            .error(R.drawable.placeholder_poster)
-            .into(ivPoster);
-        String synopsis = mediaItem.getSynopsis();
-        tvSynopsis.setText((synopsis != null && !synopsis.isEmpty()) ? synopsis : "Cargando sinopsis...");
-        btnPlay.setEnabled(false);
-        btnPlay.setText("Cargando servidores...");
-
-        loadDetail();
-
-        btnPlay.setOnClickListener(v -> {
-            if (isSeriesContent) {
-                playFirstSeriesEpisode();
-                return;
-            }
-
-            if (!playUrls.isEmpty()) {
-                String playTitle = mediaItem.getTitulo();
-                PlayerContenidoActivity.start(this, playUrls, playTitle);
-            } else {
-                Toast.makeText(this, "No se pudo obtener la URL de reproducción", Toast.LENGTH_SHORT).show();
-            }
-        });
+        finish();
     }
 
-    private void loadDetail() {
-        new Thread(() -> {
-            try {
-                TmdbService.enrichMediaItem(mediaItem);
-
-                List<String> urls = new ArrayList<>();
-                List<AllCalidadScraper.Season> seasons = new ArrayList<>();
-                int postId = mediaItem.getPostId();
-                String mediaType = mediaItem.getMediaType();
-                boolean isSeries = isSeriesType(mediaType);
-
-                if (!isSeries) {
-                    // Película: resolver URLs de reproducción directamente
-                    urls = smartScraperEngine.resolveMovieUrls(DetalleContenidoActivity.this, mediaItem);
-                } else {
-                    // Series: NO pre-resolver 1x01 aquí para no contaminar el cache.
-                    // Los episodios se cargan al tocarlos en el adapter.
-                    // Solo obtenemos la lista de temporadas/episodios.
-                    if (postId > 0) {
-                        seasons = AllCalidadScraper.getSeasons(postId);
-                    } else {
-                        seasons = TmdbService.getTvSeasonsFallback(mediaItem);
-                    }
-                }
-
-                if (postId > 0) {
-                    AllCalidadScraper.hit(postId, normalizePostType(mediaType));
-                    if (!isSeries) {
-                        if (urls == null || urls.isEmpty()) {
-                            AllCalidadScraper.PlayerData player = AllCalidadScraper.getPlayer(postId);
-                            urls = AllCalidadScraper.getPlayableUrls(player);
-                        }
-                    }
-                }
-
-                final List<String> finalUrls = urls;
-                final List<AllCalidadScraper.Season> finalSeasons = seasons;
-                final String desc = (mediaItem.getSynopsis() != null && !mediaItem.getSynopsis().isEmpty())
-                        ? mediaItem.getSynopsis()
-                        : "Sin sinopsis disponible.";
-                final String finalPoster = mediaItem.getImagen();
-                final boolean finalIsSeries = isSeries;
-
-                runOnUiThread(() -> {
-                    Glide.with(DetalleContenidoActivity.this)
-                            .load(finalPoster)
-                            .placeholder(R.drawable.placeholder_poster)
-                            .error(R.drawable.placeholder_poster)
-                            .into(ivPoster);
-                    tvSynopsis.setText(desc);
-
-                    isSeriesContent = finalIsSeries;
-                    episodeAdapter.setSeriesPoster(finalPoster);
-                    bindSeasons(finalSeasons, finalIsSeries);
-
-                    playUrls.clear();
-                    playUrls.addAll(finalUrls);
-                    updatePlayButtonState();
-                });
-            } catch (Exception e) {
-                e.printStackTrace();
-                runOnUiThread(() -> {
-                    tvSynopsis.setText("Error al cargar la sinopsis.");
-                    if (!isSeriesContent) {
-                        btnPlay.setEnabled(false);
-                        btnPlay.setText("No disponible");
-                    }
-                });
-            }
-        }).start();
-    }
-
-    private void bindSeasons(List<AllCalidadScraper.Season> seasons, boolean showEpisodes) {
-        seasonItems.clear();
-        firstSeriesEpisode = null;
-        if (seasons != null) {
-            for (AllCalidadScraper.Season season : seasons) {
-                if (season == null || season.episodes == null || season.episodes.isEmpty()) {
-                    continue;
-                }
-                seasonItems.add(season);
-                if (firstSeriesEpisode == null) {
-                    for (AllCalidadScraper.Episode episode : season.episodes) {
-                        if (episode != null && episode.id > 0) {
-                            firstSeriesEpisode = episode;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        episodeAdapter.setSeasons(seasonItems);
-
-        int visibility = showEpisodes && !seasonItems.isEmpty() ? View.VISIBLE : View.GONE;
-        tvEpisodesTitle.setVisibility(visibility);
-        rvEpisodes.setVisibility(visibility);
-    }
-
-    private void loadEpisodeServers(AllCalidadScraper.Episode episode) {
-        if (episode == null || episode.id <= 0) {
-            return;
-        }
-
-        new Thread(() -> {
-            try {
-                List<String> urls = smartScraperEngine.resolveEpisodeUrls(
-                        DetalleContenidoActivity.this,
-                        mediaItem,
-                        episode.seasonNumber,
-                        episode.episodeNumber,
-                        episode.id
-                );
-                if (urls == null || urls.isEmpty()) {
-                    if (mediaItem.getPostId() > 0) {
-                        AllCalidadScraper.hit(episode.id, "episodes");
-                        urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(episode.id));
-                    }
-                }
-                String label = formatEpisodeLabel(episode);
-                final List<String> finalUrls = urls;
-
-                runOnUiThread(() -> {
-                    if (finalUrls == null || finalUrls.isEmpty()) {
-                        Toast.makeText(DetalleContenidoActivity.this, "No hay servidores para " + label, Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-
-                    ArrayList<String> playList = new ArrayList<>(finalUrls);
-                    String playTitle = mediaItem.getTitulo() + " - " + label;
-                    PlayerContenidoActivity.startEpisode(
-                            DetalleContenidoActivity.this,
-                            playList,
-                            playTitle,
-                            mediaItem.getTitulo(),
-                            mediaItem.getPostId(),
-                            normalizePostType(mediaItem.getMediaType()),
-                            episode.id,
-                            episode.seasonNumber,
-                            episode.episodeNumber
-                    );
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    Toast.makeText(DetalleContenidoActivity.this, "Error cargando episodio", Toast.LENGTH_SHORT).show();
-                });
-            }
-        }).start();
-    }
-
-    private void playFirstSeriesEpisode() {
-        if (firstSeriesEpisode == null || firstSeriesEpisode.id <= 0) {
-            Toast.makeText(this, "No hay episodios disponibles", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        loadEpisodeServers(firstSeriesEpisode);
-    }
-
-    private void updatePlayButtonState() {
-        btnPlay.setVisibility(View.VISIBLE);
-
-        if (isSeriesContent) {
-            if (firstSeriesEpisode != null && firstSeriesEpisode.id > 0) {
-                btnPlay.setEnabled(true);
-                btnPlay.setText("Reproducir " + formatEpisodeLabel(firstSeriesEpisode));
-            } else {
-                // Sin episodios disponibles aún o sin postId — ocultar el botón,
-                // el usuario debe tocar directamente en el episodio del listado.
-                btnPlay.setEnabled(false);
-                btnPlay.setText("Selecciona un episodio");
-            }
-            return;
-        }
-
-        if (playUrls.isEmpty()) {
-            btnPlay.setEnabled(false);
-            btnPlay.setText("No disponible");
-            return;
-        }
-
-        btnPlay.setEnabled(true);
-        btnPlay.setText("Reproducir");
-    }
-
-    private boolean isSeriesType(String mediaType) {
-        String type = mediaType == null ? "" : mediaType.toLowerCase(Locale.ROOT);
-        return "tvshows".equals(type) || "animes".equals(type) || "series".equals(type) || "tv".equals(type);
-    }
-
-    private String normalizePostType(String mediaType) {
-        if (mediaType == null || mediaType.trim().isEmpty()) {
-            return "movies";
-        }
-        String type = mediaType.trim().toLowerCase(Locale.ROOT);
-        if ("series".equals(type) || "tv".equals(type) || "tvshow".equals(type)) {
-            return "tvshows";
-        }
-        if ("anime".equals(type)) {
-            return "animes";
-        }
-        return type;
-    }
-
-    private String formatEpisodeLabel(AllCalidadScraper.Episode episode) {
-        if (episode == null) {
-            return "";
-        }
-        int season = episode.seasonNumber > 0 ? episode.seasonNumber : 1;
-        int number = episode.episodeNumber > 0 ? episode.episodeNumber : 1;
-        return String.format(Locale.getDefault(), "T%d:E%d", season, number);
-    }
-
-    public static void start(android.content.Context context, sv.edu.catolica.rex.models.MediaItem item) {
-        android.content.Intent intent = new android.content.Intent(context, DetalleContenidoActivity.class);
+    public static void start(Context context, MediaItem item) {
+        Intent intent = new Intent(context, DetalleContenidoActivity.class);
         intent.putExtra(EXTRA_MEDIA_ITEM, item);
         context.startActivity(intent);
     }

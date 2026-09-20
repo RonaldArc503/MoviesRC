@@ -1,48 +1,55 @@
 package sv.edu.catolica.rex.ui.detalle;
 
-import android.app.UiModeManager;
 import android.content.Context;
-import android.content.res.Configuration;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.TextView;
+import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
-import java.util.ArrayList;
-import java.util.List;
-import sv.edu.catolica.rex.R;
-import sv.edu.catolica.rex.network.AllCalidadScraper;
+
 import com.bumptech.glide.Glide;
-import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
 
-public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+import java.util.ArrayList;
+import java.util.List;
 
-    private static final int TYPE_SEASON_HEADER = 0;
-    private static final int TYPE_EPISODE = 1;
+import sv.edu.catolica.rex.R;
+import sv.edu.catolica.rex.network.AllCalidadScraper;
+
+/**
+ * Lista de episodios de la temporada seleccionada (diseño HBOMax: fila con
+ * thumbnail + play + título + descripción). No muestra headers de temporada:
+ * la temporada se elige con el chip selector del detalle.
+ */
+public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.EpisodeViewHolder> {
 
     public interface OnEpisodeClickListener {
         void onEpisodeClick(AllCalidadScraper.Episode episode);
     }
 
-    private final List<RowItem> rows = new ArrayList<>();
+    private final List<AllCalidadScraper.Season> seasons = new ArrayList<>();
+    private final List<AllCalidadScraper.Episode> episodes = new ArrayList<>();
     private final OnEpisodeClickListener listener;
-    private androidx.recyclerview.widget.RecyclerView recyclerView;
-    private boolean isTvDevice = false;
+    private int selectedSeason = -1;
     private String seriesPosterUrl = "";
+    private boolean isTvDevice = false;
+    private int activeEpisodeId = -1;
+    private int activeProgressPercent = 0;
 
-    private static class RowItem {
-        int type;
-        int seasonNumber;
-        AllCalidadScraper.Episode episode;
+    public EpisodeAdapter(OnEpisodeClickListener listener) {
+        this.listener = listener;
+        setHasStableIds(true);
     }
 
-    public EpisodeAdapter(OnEpisodeClickListener listener, androidx.recyclerview.widget.RecyclerView recyclerView) {
-        this.listener = listener;
-        this.recyclerView = recyclerView;
-        setHasStableIds(true);
+    public void setResumeProgress(int episodeId, int progressPercent) {
+        this.activeEpisodeId = episodeId;
+        this.activeProgressPercent = progressPercent;
+        notifyDataSetChanged();
     }
 
     public void setSeriesPoster(String posterUrl) {
@@ -50,195 +57,178 @@ public class EpisodeAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     }
 
     public void setSeasons(List<AllCalidadScraper.Season> seasons) {
-        rows.clear();
+        this.seasons.clear();
         if (seasons != null) {
-            for (AllCalidadScraper.Season season : seasons) {
-                if (season == null) {
-                    continue;
+            for (AllCalidadScraper.Season s : seasons) {
+                if (s != null && s.episodes != null && !s.episodes.isEmpty()) {
+                    this.seasons.add(s);
                 }
+            }
+        }
+        if (!this.seasons.isEmpty()) {
+            int first = this.seasons.get(0).seasonNumber > 0
+                    ? this.seasons.get(0).seasonNumber : 1;
+            showSeason(first);
+        } else {
+            selectedSeason = -1;
+            episodes.clear();
+            notifyDataSetChanged();
+        }
+    }
 
-                RowItem header = new RowItem();
-                header.type = TYPE_SEASON_HEADER;
-                header.seasonNumber = season.seasonNumber > 0 ? season.seasonNumber : 1;
-                rows.add(header);
-
-                if (season.episodes == null) {
-                    continue;
-                }
-                for (AllCalidadScraper.Episode episode : season.episodes) {
-                    if (episode == null) {
-                        continue;
-                    }
-                    RowItem episodeRow = new RowItem();
-                    episodeRow.type = TYPE_EPISODE;
-                    episodeRow.seasonNumber = header.seasonNumber;
-                    episodeRow.episode = episode;
-                    rows.add(episodeRow);
-                }
+    public void showSeason(int seasonNumber) {
+        selectedSeason = seasonNumber;
+        episodes.clear();
+        for (AllCalidadScraper.Season s : seasons) {
+            int sn = s.seasonNumber > 0 ? s.seasonNumber : 1;
+            if (sn == seasonNumber) {
+                episodes.addAll(s.episodes);
+                break;
             }
         }
         notifyDataSetChanged();
     }
 
+    public int getSelectedSeasonNumber() {
+        return selectedSeason;
+    }
+
+    public int getEpisodeCountInSelectedSeason() {
+        return episodes.size();
+    }
+
     @NonNull
     @Override
-    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        LayoutInflater inflater = LayoutInflater.from(parent.getContext());
+    public EpisodeViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        Context ctx = parent.getContext();
         if (!isTvDevice) {
-            isTvDevice = detectTvDevice(parent.getContext());
+            isTvDevice = detectTvDevice(ctx);
         }
-        if (viewType == TYPE_SEASON_HEADER) {
-            View view = inflater.inflate(R.layout.item_season_header, parent, false);
-            return new SeasonHeaderViewHolder(view);
-        }
-        int episodeLayout = isTvDevice ? R.layout.item_episode_tv : R.layout.item_episode;
-        View view = inflater.inflate(episodeLayout, parent, false);
+        View view = LayoutInflater.from(ctx).inflate(R.layout.item_episode, parent, false);
         return new EpisodeViewHolder(view);
     }
 
     @Override
-    public int getItemViewType(int position) {
-        return rows.get(position).type;
-    }
-
-    @Override
-    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-        RowItem row = rows.get(position);
-        if (row.type == TYPE_SEASON_HEADER) {
-            SeasonHeaderViewHolder headerHolder = (SeasonHeaderViewHolder) holder;
-            headerHolder.tvSeasonTitle.setText("Temporada " + row.seasonNumber);
-            return;
-        }
-
-        EpisodeViewHolder episodeHolder = (EpisodeViewHolder) holder;
-        AllCalidadScraper.Episode episode = row.episode;
+    public void onBindViewHolder(@NonNull EpisodeViewHolder holder, int position) {
+        AllCalidadScraper.Episode episode = episodes.get(position);
         int episodeNumber = (episode != null && episode.episodeNumber > 0) ? episode.episodeNumber : 1;
         String title = (episode != null && episode.title != null && !episode.title.trim().isEmpty())
-                ? episode.title
-                : "Episodio " + episodeNumber;
+                ? episode.title : "Episodio " + episodeNumber;
+        String overview = (episode != null && episode.overview != null && !episode.overview.trim().isEmpty())
+                ? episode.overview : "";
 
-        episodeHolder.tvCode.setText("Episodio " + episodeNumber);
-        episodeHolder.tvTitle.setText(title);
-        episodeHolder.itemView.setOnClickListener(v -> {
+        holder.tvTitle.setText(episodeNumber + ". " + title);
+        holder.tvDescription.setText(overview);
+        holder.tvDescription.setVisibility(overview.isEmpty() ? View.GONE : View.VISIBLE);
+
+        // Thumbnail: still del episodio o poster de la serie
+        String thumb = (episode != null && episode.stillUrl != null && !episode.stillUrl.trim().isEmpty())
+                ? episode.stillUrl.trim() : seriesPosterUrl;
+        if (thumb.isEmpty()) {
+            holder.imgThumb.setImageResource(R.drawable.placeholder_backdrop);
+        } else {
+            Glide.with(holder.itemView.getContext())
+                    .load(thumb)
+                    .transition(DrawableTransitionOptions.withCrossFade(120))
+                    .placeholder(R.drawable.placeholder_backdrop)
+                    .error(R.drawable.placeholder_backdrop)
+                    .centerCrop()
+                    .into(holder.imgThumb);
+        }
+
+        if (holder.progressContainer != null && holder.progressFg != null) {
+            boolean isResume = (episode != null && episode.id > 0
+                    && episode.id == activeEpisodeId && activeProgressPercent > 0);
+            if (isResume) {
+                holder.progressContainer.setVisibility(View.VISIBLE);
+                holder.progressFg.post(() -> {
+                    int totalW = holder.progressContainer.getWidth();
+                    if (totalW > 0) {
+                        ViewGroup.LayoutParams lp = holder.progressFg.getLayoutParams();
+                        lp.width = Math.max(4, (int) (totalW * activeProgressPercent / 100f));
+                        holder.progressFg.setLayoutParams(lp);
+                    }
+                });
+            } else {
+                holder.progressContainer.setVisibility(View.GONE);
+            }
+        }
+
+        holder.itemView.setOnClickListener(v -> {
             if (listener != null && episode != null) {
                 listener.onEpisodeClick(episode);
             }
         });
+        holder.btnDownload.setOnClickListener(v ->
+                Toast.makeText(holder.itemView.getContext(), "Descargas — Próximamente", Toast.LENGTH_SHORT).show());
 
-        // TV focus behavior: scroll the RecyclerView to make the focused item visible
-        episodeHolder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
-            v.setSelected(hasFocus);
-            if (hasFocus && recyclerView != null) {
-                int pos = holder.getBindingAdapterPosition();
-                if (pos != androidx.recyclerview.widget.RecyclerView.NO_POSITION) {
-                    recyclerView.post(() -> recyclerView.smoothScrollToPosition(pos));
-                }
-                v.animate()
-                        .scaleX( hasFocus ? 1.03f : 1.0f)
-                        .scaleY( hasFocus ? 1.03f : 1.0f)
-                        .setDuration(150L)
+        if (isTvDevice) {
+            holder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
+                v.setSelected(hasFocus);
+                v.setAlpha(hasFocus ? 1f : 0.85f);
+                v.animate().scaleX(hasFocus ? 1.03f : 1f)
+                        .scaleY(hasFocus ? 1.03f : 1f)
+                        .setDuration(120L)
                         .start();
-            }
-        });
-
-        // Cargar poster del episodio (stillUrl) o poster de la serie como fallback
-        if (episodeHolder.ivPoster != null) {
-            String episodePoster = (episode != null && episode.stillUrl != null
-                    && !episode.stillUrl.trim().isEmpty()) ? episode.stillUrl.trim() : "";
-            String posterToLoad = !episodePoster.isEmpty() ? episodePoster
-                    : (seriesPosterUrl != null && !seriesPosterUrl.isEmpty() ? seriesPosterUrl : "");
-            if (!posterToLoad.isEmpty()) {
-                Glide.with(episodeHolder.itemView.getContext())
-                        .load(posterToLoad)
-                        .transition(DrawableTransitionOptions.withCrossFade(100))
-                        .placeholder(R.drawable.placeholder_poster)
-                        .error(R.drawable.placeholder_poster)
-                        .diskCacheStrategy(DiskCacheStrategy.ALL)
-                        .override(160, 100)
-                        .centerCrop()
-                        .into(episodeHolder.ivPoster);
-            } else {
-                episodeHolder.ivPoster.setImageResource(R.drawable.placeholder_poster);
-            }
+            });
         }
     }
 
     @Override
     public int getItemCount() {
-        return rows.size();
+        return episodes.size();
     }
 
     @Override
     public long getItemId(int position) {
-        if (position < 0 || position >= rows.size()) {
-            return RecyclerView.NO_ID;
-        }
-        RowItem row = rows.get(position);
-        if (row.type == TYPE_SEASON_HEADER) {
-            return ("season:" + row.seasonNumber).hashCode();
-        }
-        int id = row.episode != null ? row.episode.id : 0;
-        int season = row.seasonNumber;
-        int episode = row.episode != null ? row.episode.episodeNumber : 0;
-        return ("ep:" + id + ":" + season + ":" + episode).hashCode();
+        AllCalidadScraper.Episode ep = episodes.get(position);
+        return (ep != null && ep.id > 0) ? ep.id : (selectedSeason * 100000L + position);
     }
 
     public int findPositionByEpisodeId(int episodeId) {
-        if (episodeId <= 0) {
-            return RecyclerView.NO_POSITION;
-        }
-        for (int i = 0; i < rows.size(); i++) {
-            RowItem row = rows.get(i);
-            if (row != null && row.type == TYPE_EPISODE && row.episode != null && row.episode.id == episodeId) {
-                return i;
-            }
+        if (episodeId <= 0) return RecyclerView.NO_POSITION;
+        for (int i = 0; i < episodes.size(); i++) {
+            if (episodes.get(i) != null && episodes.get(i).id == episodeId) return i;
         }
         return RecyclerView.NO_POSITION;
     }
 
     public AllCalidadScraper.Episode getEpisodeAtAdapterPosition(int position) {
-        if (position < 0 || position >= rows.size()) {
-            return null;
-        }
-        RowItem row = rows.get(position);
-        if (row == null || row.type != TYPE_EPISODE) {
-            return null;
-        }
-        return row.episode;
-    }
-
-    static class SeasonHeaderViewHolder extends RecyclerView.ViewHolder {
-        TextView tvSeasonTitle;
-
-        SeasonHeaderViewHolder(@NonNull View itemView) {
-            super(itemView);
-            tvSeasonTitle = itemView.findViewById(R.id.tv_season_title);
-        }
+        if (position < 0 || position >= episodes.size()) return null;
+        return episodes.get(position);
     }
 
     static class EpisodeViewHolder extends RecyclerView.ViewHolder {
-        TextView tvCode;
-        TextView tvTitle;
-        ImageView ivPoster;
-        
+        final ImageView imgThumb;
+        final TextView tvTitle;
+        final TextView tvDescription;
+        final ImageButton btnDownload;
+        final View progressContainer;
+        final View progressBg;
+        final View progressFg;
+
         EpisodeViewHolder(@NonNull View itemView) {
             super(itemView);
-            tvCode = itemView.findViewById(R.id.tv_episode_code);
+            imgThumb = itemView.findViewById(R.id.img_episode_thumb);
             tvTitle = itemView.findViewById(R.id.tv_episode_title);
-            ivPoster = itemView.findViewById(R.id.iv_episode_poster);
+            tvDescription = itemView.findViewById(R.id.tv_episode_description);
+            btnDownload = itemView.findViewById(R.id.btn_episode_download);
+            progressContainer = itemView.findViewById(R.id.episode_progress_container);
+            progressBg = itemView.findViewById(R.id.episode_progress_bg);
+            progressFg = itemView.findViewById(R.id.episode_progress_fg);
         }
     }
 
     private boolean detectTvDevice(Context context) {
-        if (context == null) {
-            return false;
-        }
-        UiModeManager uiModeManager = (UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
-        if (uiModeManager != null &&
-                uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+        if (context == null) return false;
+        android.app.UiModeManager uiModeManager =
+                (android.app.UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
+        if (uiModeManager != null
+                && uiModeManager.getCurrentModeType() == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) {
             return true;
         }
         int uiMode = context.getResources().getConfiguration().uiMode;
-        return (uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION;
+        return (uiMode & android.content.res.Configuration.UI_MODE_TYPE_MASK)
+                == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION;
     }
 }

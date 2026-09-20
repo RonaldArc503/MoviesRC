@@ -30,10 +30,10 @@ import sv.edu.catolica.rex.viewmodel.FootballViewModel;
 
 public class FootballActivity extends AppCompatActivity {
 
-    private static final String CANAL_4_LIVE_M3U8 = "https://cdn.jwplayer.com/live/broadcast/D3kaa3Ky.m3u8";
-    private static final String CANAL_4_LIVE_MPD = "https://cdn.jwplayer.com/live/broadcast/D3kaa3Ky.mpd";
-    private static final String CANAL_2_LIVE_M3U8 = "https://cdn.jwplayer.com/live/broadcast/48WUA30M.m3u8";
-    private static final String CANAL_2_LIVE_MPD = "https://cdn.jwplayer.com/live/broadcast/48WUA30M.mpd";
+    private static final String CANAL_4_LIVE_M3U8 = "http://186.33.26.18:8000/play/a0qk/index.m3u8";
+    private static final String CANAL_4_LIVE_MPD = "http://45.167.2.101:8000/play/a0qk/index.m3u8";
+    private static final String CANAL_2_LIVE_M3U8 = "http://186.33.26.18:8000/play/a0qp/index.m3u8";
+    private static final String CANAL_2_LIVE_MPD = "http://45.167.2.101:8000/play/a0qp/index.m3u8";
 
     private RecyclerView rvMatches;
     private ProgressBar progressBar;
@@ -198,7 +198,8 @@ public class FootballActivity extends AppCompatActivity {
                 this,
                 pendingPlaybackStream.getEmbedUrl(),
                 pendingPlaybackStream.getEventsUrl(),
-                pendingPlaybackTitle
+                pendingPlaybackTitle,
+                false
         );
         clearPendingPlayback();
     }

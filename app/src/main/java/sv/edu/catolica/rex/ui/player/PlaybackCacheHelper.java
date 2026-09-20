@@ -39,7 +39,7 @@ public final class PlaybackCacheHelper {
     private static final int  CONNECT_TIMEOUT_MS = 15_000;
     private static final int  READ_TIMEOUT_MS    = 20_000;
     private static final String USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 13; SmartTV) AppleWebKit/537.36 " +
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
     private static final Object                        CACHE_LOCK   = new Object();
@@ -57,30 +57,43 @@ public final class PlaybackCacheHelper {
 
     // ─── Cache singleton ─────────────────────────────────────────────────────
 
+    /**
+     * Devuelve el caché ya inicializado (o null si aún no está listo). No bloquea:
+     * la creación pesada (directorio + SQLite) se hace en {@link #initCacheAsync}.
+     */
     public static SimpleCache getCache(Context context) {
+        return CACHE_REF.get();
+    }
+
+    /**
+     * Inicializa el caché en segundo plano para que esté listo antes de usarlo.
+     * Llamar pronto en el arranque (Home/Detalle) evita bloquear el hilo principal.
+     */
+    public static void initCacheAsync(Context context) {
         Context appContext = context != null ? context.getApplicationContext() : null;
-        if (appContext == null) {
-            return null;
-        }
+        if (appContext == null || CACHE_REF.get() != null) return;
+        PRELOAD_EXECUTOR.submit(() -> ensureCache(appContext));
+    }
 
-        SimpleCache cache = CACHE_REF.get();
-        if (cache != null) {
-            return cache;
-        }
-
+    private static SimpleCache ensureCache(Context appContext) {
+        if (appContext == null) return null;
+        SimpleCache existing = CACHE_REF.get();
+        if (existing != null) return existing;
         synchronized (CACHE_LOCK) {
-            cache = CACHE_REF.get();
-            if (cache != null) {
+            SimpleCache cache = CACHE_REF.get();
+            if (cache != null) return cache;
+            try {
+                File cacheDir = new File(appContext.getCacheDir(), "rex_media_cache");
+                LeastRecentlyUsedCacheEvictor evictor =
+                        new LeastRecentlyUsedCacheEvictor(CACHE_SIZE_BYTES);
+                StandaloneDatabaseProvider databaseProvider =
+                        new StandaloneDatabaseProvider(appContext);
+                cache = new SimpleCache(cacheDir, evictor, databaseProvider);
+                CACHE_REF.set(cache);
                 return cache;
+            } catch (Exception e) {
+                return null;
             }
-            File cacheDir = new File(appContext.getCacheDir(), "rex_media_cache");
-            LeastRecentlyUsedCacheEvictor evictor =
-                    new LeastRecentlyUsedCacheEvictor(CACHE_SIZE_BYTES);
-            StandaloneDatabaseProvider databaseProvider =
-                    new StandaloneDatabaseProvider(appContext);
-            cache = new SimpleCache(cacheDir, evictor, databaseProvider);
-            CACHE_REF.set(cache);
-            return cache;
         }
     }
 
@@ -90,14 +103,15 @@ public final class PlaybackCacheHelper {
             Context context,
             DefaultHttpDataSource.Factory upstreamFactory) {
 
-        CacheDataSource.Factory factory = new CacheDataSource.Factory();
         SimpleCache cache = getCache(context);
-        if (cache != null) {
-            factory.setCache(cache);
-            factory.setCacheWriteDataSinkFactory(
-                    new CacheDataSink.Factory().setCache(cache));
-            factory.setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+        if (cache == null) {
+            return null;
         }
+        CacheDataSource.Factory factory = new CacheDataSource.Factory();
+        factory.setCache(cache);
+        factory.setCacheWriteDataSinkFactory(
+                new CacheDataSink.Factory().setCache(cache));
+        factory.setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
         if (upstreamFactory != null) {
             factory.setUpstreamDataSourceFactory(upstreamFactory);
         }
@@ -106,9 +120,26 @@ public final class PlaybackCacheHelper {
 
     public static DefaultHttpDataSource.Factory newHttpDataSourceFactory(
             Map<String, String> headers) {
+        return newHttpDataSourceFactory(null, headers);
+    }
+
+    public static DefaultHttpDataSource.Factory newHttpDataSourceFactory(
+            Context context,
+            Map<String, String> headers) {
+
+        String ua = USER_AGENT;
+        if (context != null) {
+            try {
+                String defaultUa = android.webkit.WebSettings.getDefaultUserAgent(context);
+                if (defaultUa != null && !defaultUa.trim().isEmpty()) {
+                    ua = defaultUa.trim();
+                }
+            } catch (Exception ignored) {
+            }
+        }
 
         DefaultHttpDataSource.Factory factory = new DefaultHttpDataSource.Factory()
-                .setUserAgent(USER_AGENT)
+                .setUserAgent(ua)
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(CONNECT_TIMEOUT_MS)
                 .setReadTimeoutMs(READ_TIMEOUT_MS);
@@ -131,6 +162,12 @@ public final class PlaybackCacheHelper {
         if (lc.contains("vimeos.net") || lc.contains("s12.vimeos.net")) {
             headers.put("Referer", "https://allcalidad.re/");
             headers.put("Origin",  "https://allcalidad.re");
+            headers.put("Accept",  "*/*");
+
+        // ── CDN HLS de vimeos (master.m3u8 y segmentos) ───────────────────────
+        } else if (lc.contains("vimeos.zip")) {
+            headers.put("Referer", "https://vimeos.net/");
+            headers.put("Origin",  "https://vimeos.net");
             headers.put("Accept",  "*/*");
 
         // ── Fútbol libre y dominios relacionados ───────────────────────────────
@@ -209,8 +246,6 @@ public final class PlaybackCacheHelper {
         // Factories creadas fuera del hilo (thread-safe para construcción)
         final DefaultHttpDataSource.Factory upstreamFactory =
                 newHttpDataSourceFactory(headers);
-        final CacheDataSource.Factory cacheFactory =
-                newCacheDataSourceFactory(appContext, upstreamFactory);
 
         final DataSpec dataSpec = new DataSpec.Builder()
                 .setUri(Uri.parse(trimmedUrl))
@@ -219,12 +254,23 @@ public final class PlaybackCacheHelper {
                 .build();
 
         Future<?> task = PRELOAD_EXECUTOR.submit(() -> {
-            // CacheDataSource se crea dentro del hilo: su ciclo de vida queda
-            // confinado a la tarea y se cierra al finalizar o al ser interrumpida.
-            CacheDataSource dataSource = cacheFactory.createDataSource();
-            CacheWriter writer = new CacheWriter(dataSource, dataSpec, /* temporaryBuffer */ null,
-                    /* progressListener */ null);
+            // La creación del SimpleCache (directorio + SQLite) y del dataSource
+            // ocurren aquí, en un hilo de segundo plano, para no bloquear la UI.
             try {
+                SimpleCache cache = ensureCache(appContext);
+                if (cache == null) {
+                    return;
+                }
+                CacheDataSource.Factory cf = new CacheDataSource.Factory();
+                cf.setCache(cache);
+                cf.setCacheWriteDataSinkFactory(
+                        new CacheDataSink.Factory().setCache(cache));
+                cf.setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+                cf.setUpstreamDataSourceFactory(upstreamFactory);
+                CacheDataSource dataSource = cf.createDataSource();
+
+                CacheWriter writer = new CacheWriter(dataSource, dataSpec, /* temporaryBuffer */ null,
+                        /* progressListener */ null);
                 writer.cache();
             } catch (IOException ignored) {
                 // El pre-cargado es best-effort; el playback continúa igualmente.

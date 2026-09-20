@@ -34,7 +34,35 @@
     <!-- Rating dorado -->
     <color name="ratingGold">#FFC800</color>
 
+    <!-- Player colors -->
+    <color name="player_text_primary">#FFFFFF</color>
+    <color name="player_text_secondary">#B3FFFFFF</color>
+    <color name="player_text_muted">#80FFFFFF</color>
+
+    <!-- Player Netflix/Modern streaming styling -->
+    <color name="player_icon">#FFFFFF</color>
+    <color name="player_icon_secondary">#D0D5DD</color>
+    <color name="player_text_soft">#FFFFFF</color>
+    <color name="player_seekbar_track">#40FFFFFF</color>
+    <color name="player_thumb_border">#FFFFFF</color>
+    <color name="player_center_bg">#800C0F17</color>
+    <color name="player_center_border">#40FFFFFF</color>
+    <color name="player_center_pressed">#B3202838</color>
+    <color name="player_chip_bg">#660C0F17</color>
+    <color name="player_chip_stroke">#33FFFFFF</color>
+    <color name="player_chip_pressed">#B3202838</color>
+    <color name="player_chip_focus">#D9E63540</color>
+    <color name="player_panel_bg">#E60C0F17</color>
+    <color name="player_panel_border">#33FFFFFF</color>
+    <color name="player_thumb_ring">#E63540</color>
+    <color name="bottom_nav_bg">#E6141414</color>
+    <color name="bottom_nav_stroke">#1FFFFFFF</color>
+
     <!-- Colores legacy (para no romper referencias existentes) -->
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
+
+    <!-- Detalle estilo HBOMax -->
+    <color name="divider_color">#1FFFFFFF</color>
+
 </resources>

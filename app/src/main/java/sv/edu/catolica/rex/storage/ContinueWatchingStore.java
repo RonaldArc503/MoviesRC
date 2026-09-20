@@ -22,10 +22,34 @@ public class ContinueWatchingStore {
 
     private static final Gson gson = new Gson();
 
+    private static String currentUid() {
+        try {
+            com.google.firebase.auth.FirebaseAuth auth =
+                    com.google.firebase.auth.FirebaseAuth.getInstance();
+            return auth.getCurrentUser() != null ? auth.getCurrentUser().getUid() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static SharedPreferences getPrefs(Context context) {
+        String uid = currentUid();
+        String name = uid != null && !uid.isEmpty() ? PREF_NAME + "_" + uid : PREF_NAME;
+        return context.getApplicationContext().getSharedPreferences(name, Context.MODE_PRIVATE);
+    }
+
     public static void save(Context context, ContinueWatchingItem item) {
+        saveLocal(context, item);
+        syncToFirestore(context, item);
+    }
+
+    /** Igual que {@link #save} pero solo escribe localmente, sin reenviar a
+     *  Firestore. Se usa al aplicar datos remotos para no provocar un bucle de
+     *  eco (Firestore -> listener -> aplicar -> Firestore). */
+    public static void saveLocal(Context context, ContinueWatchingItem item) {
         if (context == null || item == null || item.getContentId() == null) return;
 
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         List<ContinueWatchingItem> items = loadAll(prefs);
 
         boolean found = false;
@@ -52,8 +76,60 @@ public class ContinueWatchingStore {
 
         trimToMax(items);
         saveAll(prefs, items);
+        touchLocalUpdatedAt(context);
+    }
 
-        syncToFirestore(context, item);
+    /** Hace merge (upsert) de una lista remota sobre la lista local en una sola
+     *  escritura Gson: actualiza los ítems que coinciden por contentId (prefiriendo
+     *  el más reciente por lastPlayedAt, sin retroceder el progreso local),
+     *  agrega los que no existen y PRESERVA los ítems locales que no están en
+     *  remoto. No reenvía a Firestore (evita el bucle de eco). */
+    public static void upsertAll(Context context, List<ContinueWatchingItem> remoteItems) {
+        if (context == null || remoteItems == null) return;
+        SharedPreferences prefs = getPrefs(context);
+        List<ContinueWatchingItem> local = loadAll(prefs);
+        for (ContinueWatchingItem remote : remoteItems) {
+            if (remote == null || remote.getContentId() == null) continue;
+            boolean found = false;
+            for (int i = 0; i < local.size(); i++) {
+                ContinueWatchingItem existing = local.get(i);
+                if (remote.getContentId().equals(existing.getContentId())) {
+                    if (remote.getLastPlayedAt() >= existing.getLastPlayedAt()) {
+                        if (remote.getPositionMs() > 0) existing.setPositionMs(remote.getPositionMs());
+                        if (remote.getDurationMs() > 0) existing.setDurationMs(remote.getDurationMs());
+                        existing.setProgressPercent(remote.getProgressPercent());
+                        existing.setCompleted(remote.isCompleted());
+                        existing.setLastPlayedAt(remote.getLastPlayedAt());
+                        if (remote.getEpisodeId() > 0) existing.setEpisodeId(remote.getEpisodeId());
+                        if (remote.getSeasonNumber() > 0) existing.setSeasonNumber(remote.getSeasonNumber());
+                        if (remote.getEpisodeNumber() > 0) existing.setEpisodeNumber(remote.getEpisodeNumber());
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                local.add(0, remote);
+            }
+        }
+        Collections.sort(local, (a, b) -> Long.compare(b.getLastPlayedAt(), a.getLastPlayedAt()));
+        trimToMax(local);
+        saveAll(prefs, local);
+        touchLocalUpdatedAt(context);
+    }
+
+    /** Registra en "user_metadata" la última modificación local de continuar viendo,
+     *  para que el conflicto remoto no sobrescriba datos locales más recientes. */
+    public static void touchLocalUpdatedAt(Context context) {
+        if (context == null) return;
+        try {
+            context.getApplicationContext()
+                    .getSharedPreferences("user_metadata", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("updatedAt", String.valueOf(System.currentTimeMillis()))
+                    .apply();
+        } catch (Exception ignored) {
+        }
     }
 
     private static void syncToFirestore(Context context, ContinueWatchingItem item) {
@@ -72,7 +148,7 @@ public class ContinueWatchingStore {
 
     public static List<ContinueWatchingItem> getAll(Context context) {
         if (context == null) return new ArrayList<>();
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         List<ContinueWatchingItem> items = loadAll(prefs);
         trimToMax(items);
         Collections.sort(items, (a, b) -> Long.compare(b.getLastPlayedAt(), a.getLastPlayedAt()));
@@ -81,7 +157,7 @@ public class ContinueWatchingStore {
 
     public static ContinueWatchingItem getByPostId(Context context, int postId) {
         if (context == null || postId <= 0) return null;
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         for (ContinueWatchingItem item : loadAll(prefs)) {
             if (item.getPostId() == postId) return item;
         }
@@ -90,7 +166,7 @@ public class ContinueWatchingStore {
 
     public static ContinueWatchingItem getByContentId(Context context, String contentId) {
         if (context == null || contentId == null) return null;
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         for (ContinueWatchingItem item : loadAll(prefs)) {
             if (contentId.equals(item.getContentId())) return item;
         }
@@ -99,7 +175,7 @@ public class ContinueWatchingStore {
 
     public static void remove(Context context, String contentId) {
         if (context == null || contentId == null) return;
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         List<ContinueWatchingItem> items = loadAll(prefs);
         items.removeIf(item -> contentId.equals(item.getContentId()));
         saveAll(prefs, items);
@@ -107,7 +183,7 @@ public class ContinueWatchingStore {
 
     public static void removeByPostId(Context context, int postId) {
         if (context == null || postId <= 0) return;
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         List<ContinueWatchingItem> items = loadAll(prefs);
         items.removeIf(item -> item.getPostId() == postId);
         saveAll(prefs, items);
@@ -115,7 +191,7 @@ public class ContinueWatchingStore {
 
     public static void markCompleted(Context context, String contentId) {
         if (context == null || contentId == null) return;
-        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs(context);
         List<ContinueWatchingItem> items = loadAll(prefs);
         ContinueWatchingItem completedItem = null;
         for (ContinueWatchingItem item : items) {
@@ -135,16 +211,18 @@ public class ContinueWatchingStore {
 
     public static boolean hasData(Context context) {
         if (context == null) return false;
-        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                .contains(KEY_ITEMS);
+        return getPrefs(context).contains(KEY_ITEMS);
     }
 
     public static void clear(Context context) {
         if (context == null) return;
-        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .remove(KEY_ITEMS)
-                .apply();
+        getPrefs(context).edit().remove(KEY_ITEMS).apply();
+    }
+
+    /** Limpia los datos de continuar viendo del usuario actualmente logueado. */
+    public static void clearForCurrentUser(Context context) {
+        if (context == null) return;
+        clear(context);
     }
 
     private static List<ContinueWatchingItem> loadAll(SharedPreferences prefs) {

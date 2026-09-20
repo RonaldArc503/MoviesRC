@@ -5,7 +5,7 @@ import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.smart.SmartPlaybackResult;
 import sv.edu.catolica.rex.network.smart.PelispediaScraper;
-
+import sv.edu.catolica.rex.source.SourceMatcher;
 public class PelispediaSource implements ContentSource {
     private final PelispediaScraper scraper = new PelispediaScraper();
 
@@ -35,10 +35,8 @@ public class PelispediaSource implements ContentSource {
             String q = item.getTitulo();
             if (q == null || q.trim().isEmpty()) return new SmartPlaybackResult();
             List<MediaItem> results = scraper.search(q, 5);
-            if (results != null && !results.isEmpty()) {
-                MediaItem first = results.get(0);
-                return scraper.resolveMovie(first);
-            }
+            MediaItem best = pickBestMatch(results, q);
+            if (best != null) return scraper.resolveMovie(best);
             return new SmartPlaybackResult();
         }
         return scraper.resolveMovie(item);
@@ -51,12 +49,56 @@ public class PelispediaSource implements ContentSource {
             String q = item.getTitulo();
             if (q == null || q.trim().isEmpty()) return new SmartPlaybackResult();
             List<MediaItem> results = scraper.search(q, 5);
-            if (results != null && !results.isEmpty()) {
-                MediaItem first = results.get(0);
-                return scraper.resolveEpisode(first, season, episode);
-            }
+            MediaItem best = pickBestMatch(results, q);
+            if (best != null) return scraper.resolveEpisode(best, season, episode);
             return new SmartPlaybackResult();
         }
         return scraper.resolveEpisode(item, season, episode);
+    }
+
+    /**
+     * Elige el mejor resultado de búsqueda por solapamiento de palabras con el
+     * título solicitado. Exige que al menos la mitad de las palabras del título
+     * (o el 60% del mejor score de similitud) coincidan; nunca toma el primer
+     * resultado a ciegas, para no resolver contenido distinto.
+     */
+    private MediaItem pickBestMatch(List<MediaItem> results, String query) {
+        if (results == null || results.isEmpty()) return null;
+        String qNorm = SourceMatcher.normalize(query);
+        if (qNorm.isEmpty()) return null;
+        String[] qWords = qNorm.split("\\s+");
+
+        MediaItem best = null;
+        int bestScore = 0;
+        for (MediaItem r : results) {
+            String rNorm = SourceMatcher.normalize(r.getTitulo());
+            if (rNorm.isEmpty()) continue;
+            String[] rWords = rNorm.split("\\s+");
+            int overlap = 0;
+            for (String qw : qWords) {
+                if (qw.length() < 2) continue;
+                for (String rw : rWords) {
+                    if (rw.length() < 2) continue;
+                    if (qw.equals(rw)
+                            || (qw.length() > 3 && rw.startsWith(qw))
+                            || (rw.length() > 3 && qw.startsWith(rw))) {
+                        overlap++;
+                        break;
+                    }
+                }
+            }
+            int meaningful = 0;
+            for (String qw : qWords) {
+                if (qw.length() >= 2) meaningful++;
+            }
+            if (meaningful == 0) continue;
+            int score = (overlap * 100) / meaningful;
+            if (score > bestScore) {
+                bestScore = score;
+                best = r;
+            }
+        }
+        if (bestScore < 60) return null;
+        return best;
     }
 }

@@ -105,6 +105,15 @@
             android:textColor="@color/accentRedLight"
             android:textSize="14sp" />
 
+        <TextView
+            android:id="@+id/tv_forgot_password"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="¿Olvidaste tu contraseña?"
+            android:textColor="@color/accentRedLight"
+            android:textSize="13sp" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

@@ -322,7 +322,6 @@
                     android:id="@+id/rv_episodes"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:nestedScrollingEnabled="false"
                     android:visibility="gone" />
 
             </LinearLayout>
