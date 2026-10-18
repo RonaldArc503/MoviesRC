@@ -106,17 +106,4 @@
             android:textSize="12sp"
             android:lineSpacingExtra="2dp" />
     </LinearLayout>
-
-    <ImageButton
-        android:id="@+id/btn_episode_download"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
-        android:layout_gravity="center_vertical"
-        android:layout_marginStart="6dp"
-        android:background="@android:color/transparent"
-        android:padding="8dp"
-        android:scaleType="centerInside"
-        android:src="@drawable/ic_download"
-        app:tint="@color/player_icon_secondary"
-        android:contentDescription="@null" />
 </LinearLayout>

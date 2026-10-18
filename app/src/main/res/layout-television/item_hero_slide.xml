@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0A0C10"
+    android:clipChildren="false"
+    android:clipToPadding="false">
+
+    <!-- ── 1. BACKDROP CINEMÁTICO (Widescreen TV) ── -->
+    <ImageView
+        android:id="@+id/img_hero_backdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:contentDescription="@null" />
+
+    <!-- ── 2. GRADIENTE LATERAL IZQUIERDO (Legibilidad estilo HBO Max) ── -->
+    <View
+        android:layout_width="600dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@drawable/bg_hero_gradient_lateral_hbomax" />
+
+    <!-- ── 3. GRADIENTE INFERIOR (Fusión suave con las secciones) ── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="220dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_hero_gradient_bottom_hbomax" />
+
+    <!-- ── 4. CONTENIDO HERO (Lado izquierdo, estilo HBO Max) ── -->
+    <LinearLayout
+        android:layout_width="560dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:orientation="vertical"
+        android:paddingStart="48dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="42dp"
+        android:clipChildren="false"
+        android:clipToPadding="false">
+
+        <!-- Tag de Categoría / Marca (ej. [adult swim], [HBO]) -->
+        <TextView
+            android:id="@+id/tv_hero_match"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-black"
+            android:text="DESTACADO"
+            android:textColor="#E0E0E0"
+            android:textSize="12sp"
+            android:letterSpacing="0.12"
+            android:textAllCaps="true"
+            android:layout_marginBottom="6dp" />
+
+        <!-- Título Principal Gran Impacto HBO Max -->
+        <TextView
+            android:id="@+id/tv_hero_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-black"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textColor="#FFFFFF"
+            android:textSize="32sp"
+            android:lineSpacingMultiplier="1.05"
+            android:shadowColor="#CC000000"
+            android:shadowRadius="10"
+            android:shadowDy="3" />
+
+        <!-- Metadata (Badge Edad, Año, Temporadas) -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tv_hero_rating"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_meta_badge_hbomax"
+                android:textColor="#FFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_hero_year"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:textColor="#D4D6DE"
+                android:textSize="12sp"
+                android:fontFamily="sans-serif" />
+
+        </LinearLayout>
+
+        <!-- Sinopsis HBO Max (2 líneas legibles) -->
+        <TextView
+            android:id="@+id/tv_hero_synopsis"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textColor="#B3FFFFFF"
+            android:textSize="13sp"
+            android:lineSpacingExtra="2dp" />
+
+        <!-- ── BOTONES DE ACCIÓN HBO MAX (Navegables con D-Pad) ── -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:clipChildren="false"
+            android:clipToPadding="false">
+
+            <!-- Botón Primario Reproducir / Reanudar (Píldora blanca) -->
+            <LinearLayout
+                android:id="@+id/btn_hero_play"
+                android:layout_width="wrap_content"
+                android:layout_height="44dp"
+                android:background="@drawable/bg_hero_btn_play_hbomax"
+                android:clickable="true"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:paddingStart="22dp"
+                android:paddingEnd="26dp"
+                android:elevation="4dp"
+                android:nextFocusRight="@+id/btn_hero_mylist">
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_play"
+                    app:tint="@android:color/black"
+                    android:contentDescription="@null" />
+
+                <TextView
+                    android:id="@+id/tv_hero_play_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="Reproducir"
+                    android:textColor="@android:color/black"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-bold" />
+            </LinearLayout>
+
+            <!-- Botón Secundario: Mi Lista (+) -->
+            <ImageButton
+                android:id="@+id/btn_hero_mylist"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="14dp"
+                android:background="@drawable/bg_hero_btn_secondary_hbomax"
+                android:src="@drawable/ic_add"
+                android:padding="11dp"
+                android:scaleType="fitCenter"
+                android:clickable="true"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                app:tint="#FFFFFF"
+                android:contentDescription="Mi lista"
+                android:nextFocusLeft="@+id/btn_hero_play"
+                android:nextFocusRight="@+id/btn_hero_info" />
+
+            <!-- Botón Secundario: Más Información (i) -->
+            <ImageButton
+                android:id="@+id/btn_hero_info"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="12dp"
+                android:background="@drawable/bg_hero_btn_secondary_hbomax"
+                android:src="@drawable/ic_info"
+                android:padding="10dp"
+                android:scaleType="fitCenter"
+                android:clickable="true"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                app:tint="#FFFFFF"
+                android:contentDescription="Más información"
+                android:nextFocusLeft="@+id/btn_hero_mylist" />
+
+        </LinearLayout>
+    </LinearLayout>
+
+</FrameLayout>

@@ -6,11 +6,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
-class SmartCacheStore {
+public class SmartCacheStore {
 
     private static final String PREF = "smart_scraper_cache";
-    private static final String KEY_PREFIX_PLAYBACK = "playback_v4_";
+    private static final String KEY_PREFIX_PLAYBACK = "playback_v5_";
     private static final String KEY_PREFIX_IDS = "ids_";
     private static final long PLAYBACK_TTL_MS = 6L * 60L * 60L * 1000L;
     private static final long IDS_TTL_MS = 24L * 60L * 60L * 1000L;
@@ -139,5 +140,41 @@ class SmartCacheStore {
             out.add(mediaType == null ? "" : mediaType);
             return out;
         }
+    }
+
+    public static void cleanExpiredEntries(Context context) {
+        if (context == null) return;
+        try {
+            SharedPreferences pref = context.getSharedPreferences(PREF, Context.MODE_PRIVATE);
+            Map<String, ?> all = pref.getAll();
+            if (all == null || all.isEmpty()) return;
+
+            long now = System.currentTimeMillis();
+            SharedPreferences.Editor editor = pref.edit();
+            boolean changed = false;
+
+            for (Map.Entry<String, ?> entry : all.entrySet()) {
+                String key = entry.getKey();
+                Object val = entry.getValue();
+                if (!(val instanceof String)) continue;
+
+                try {
+                    JSONObject root = new JSONObject((String) val);
+                    long ts = root.optLong("ts", 0L);
+                    long ttl = key.startsWith(KEY_PREFIX_IDS) ? IDS_TTL_MS : PLAYBACK_TTL_MS;
+                    if (ts <= 0L || (now - ts) > ttl) {
+                        editor.remove(key);
+                        changed = true;
+                    }
+                } catch (Exception ignored) {
+                    editor.remove(key);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                editor.apply();
+            }
+        } catch (Exception ignored) {}
     }
 }

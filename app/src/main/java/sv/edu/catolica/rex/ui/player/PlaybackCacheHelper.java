@@ -34,8 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @OptIn(markerClass = UnstableApi.class)
 public final class PlaybackCacheHelper {
 
-    private static final long CACHE_SIZE_BYTES  = 512L * 1024L * 1024L; // 512 MB
-    private static final long PRELOAD_BYTES      = 5L  * 1024L * 1024L; //   5 MB
+    private static final long CACHE_SIZE_BYTES  = 40L * 1024L * 1024L; // 40 MB max para buffering de video
+    private static final long PRELOAD_BYTES      = 3L  * 1024L * 1024L; //  3 MB
     private static final int  CONNECT_TIMEOUT_MS = 15_000;
     private static final int  READ_TIMEOUT_MS    = 20_000;
     private static final String USER_AGENT =
@@ -198,6 +198,21 @@ public final class PlaybackCacheHelper {
             headers.put("Origin",  "https://allcalidad.re");
             headers.put("Accept",  "*/*");
 
+        // ── Cuevana 3 servidores (vidhide, streamwish, filemoon, etc.) ─────────
+        } else if (lc.contains("cuevana")
+                || lc.contains("streamwish")
+                || lc.contains("wishembed")
+                || lc.contains("strwish")
+                || lc.contains("filemoon")
+                || lc.contains("filelions")
+                || lc.contains("bysejikuar")
+                || lc.contains("vidhide")
+                || lc.contains("vidhidepro")
+                || lc.contains("waaw")) {
+            headers.put("Referer", "https://wv3.cuevana3.eu/");
+            headers.put("Origin",  "https://wv3.cuevana3.eu");
+            headers.put("Accept",  "*/*");
+
         // ── Streams genéricos HLS/DASH (probar con referer del propio dominio) ─
         } else {
             // Para URLs que terminan en .m3u8, .mpd o .mp4 sin dominio conocido,
@@ -293,5 +308,43 @@ public final class PlaybackCacheHelper {
             // CacheWriter.cache() lance InterruptedException y termine limpiamente.
             task.cancel(true);
         }
+    }
+
+    /**
+     * Limpia completamente los fragmentos de video almacenados en disco.
+     */
+    public static void clearMediaCache(Context context) {
+        Context appContext = context != null ? context.getApplicationContext() : null;
+        if (appContext == null) return;
+        PRELOAD_EXECUTOR.submit(() -> {
+            cancelPreload();
+            synchronized (CACHE_LOCK) {
+                try {
+                    SimpleCache cache = CACHE_REF.get();
+                    if (cache != null) {
+                        for (String key : cache.getKeys()) {
+                            try {
+                                cache.removeResource(key);
+                            } catch (Exception ignored) {}
+                        }
+                    } else {
+                        File cacheDir = new File(appContext.getCacheDir(), "rex_media_cache");
+                        deleteDirectory(cacheDir);
+                    }
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private static boolean deleteDirectory(File dir) {
+        if (dir != null && dir.isDirectory()) {
+            String[] children = dir.list();
+            if (children != null) {
+                for (String child : children) {
+                    deleteDirectory(new File(dir, child));
+                }
+            }
+        }
+        return dir != null && dir.delete();
     }
 }

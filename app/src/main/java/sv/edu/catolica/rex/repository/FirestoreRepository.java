@@ -71,7 +71,17 @@ public class FirestoreRepository {
                     break;
                 }
             }
-            if (!found) list.add(0, item);
+            if (sv.edu.catolica.rex.storage.ContinueWatchingStore.isSeries(item)) {
+                // Firestore debe conservar la misma semántica que el store local:
+                // una única referencia vigente por serie, aun al actualizar un
+                // episodio cuyo contentId ya existía.
+                list.removeIf(existing -> existing != null
+                        && !item.getContentId().equals(existing.getContentId())
+                        && sv.edu.catolica.rex.storage.ContinueWatchingStore.isSameSeries(item, existing));
+            }
+            if (!found) {
+                list.add(0, item);
+            }
             Map<String, Object> updates = new HashMap<>();
             updates.put(FIELD_CONTINUE_WATCHING, list);
             updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());
@@ -127,7 +137,7 @@ public class FirestoreRepository {
                     return Tasks.forResult(null);
                 }
             }
-            list.add(item);
+            list.add(0, item);
             Map<String, Object> updates = new HashMap<>();
             updates.put(FIELD_FAVORITES, list);
             updates.put(FIELD_UPDATED_AT, FieldValue.serverTimestamp());

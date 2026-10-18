@@ -15,11 +15,21 @@ public class SourcePriorityManager {
     }
 
     public List<String> getPriorityList() {
-        String csv = prefs.getString("order", "allcalidad,pelispedia");
-        if (csv == null || csv.trim().isEmpty()) return Collections.singletonList("allcalidad");
+        String csv = prefs.getString("order", "allcalidad,cuevana3,pelispedia");
+        if (csv == null || csv.trim().isEmpty()) csv = "allcalidad,cuevana3,pelispedia";
         String[] parts = csv.split(",");
         List<String> out = new ArrayList<>();
-        for (String p : parts) out.add(p.trim());
+        for (String p : parts) {
+            String trimmed = p.trim();
+            if (!trimmed.isEmpty() && !out.contains(trimmed)) {
+                out.add(trimmed);
+            }
+        }
+        if (!out.contains("cuevana3")) {
+            int idx = out.indexOf("pelispedia");
+            if (idx >= 0) out.add(idx, "cuevana3");
+            else out.add("cuevana3");
+        }
         return out;
     }
 

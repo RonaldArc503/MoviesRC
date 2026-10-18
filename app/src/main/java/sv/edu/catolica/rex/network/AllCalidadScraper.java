@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.zip.GZIPInputStream;
 import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.source.SourceMatcher;
@@ -28,12 +31,31 @@ public class AllCalidadScraper {
 
     private static final String TAG      = "AllCalidadScraper";
     private static final String SITE_BASE = "https://allcalidad.re";
-    private static final String API_BASE  = "https://allcalidad.re/api/rest";
+    private static final String API_BASE  = "https://tmdb.allcalidad.re/v1";
+    private static final String TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
     private static final String PREFERRED_SERVER_KEYWORD = "embed89";
-    private static final int    TIMEOUT_MS = 30_000;
+    private static final int    TIMEOUT_MS = 6_000;
     private static final int    MAX_HTTP_ATTEMPTS = 3;
-    private static final long   REQUEST_BASE_DELAY_MS = 420L;
-    private static final long   REQUEST_JITTER_MS = 260L;
+    private static final long   REQUEST_BASE_DELAY_MS = 200L;
+    private static final long   REQUEST_JITTER_MS = 100L;
+
+    private static final Map<Integer, String> MEDIA_CODE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static String tmdbImageUrl(String path, String size) {
+        if (path == null || path.trim().isEmpty()) return "";
+        String p = path.trim();
+        if (p.startsWith("http://") || p.startsWith("https://")) return p;
+        if (p.startsWith("//")) return "https:" + p;
+        if (!p.startsWith("/")) p = "/" + p;
+        String s = (size != null && !size.isEmpty()) ? size : "original";
+        return TMDB_IMAGE_BASE + "/" + s + p;
+    }
+
+    public static void registerCode(int id, String code) {
+        if (id > 0 && code != null && !code.trim().isEmpty()) {
+            MEDIA_CODE_CACHE.put(id, code.trim());
+        }
+    }
 
     // ── User-Agent real de Chrome 124 en Android ──────────────────────────────
     private static final String USER_AGENT =
@@ -48,7 +70,7 @@ public class AllCalidadScraper {
     public static class ContentItem {
         public int    id;
         public String title, originalTitle, year, overview, posterUrl, backdropUrl,
-                detailUrl, rating, type;
+                detailUrl, rating, type, code;
     }
 
     public static class PlayerData {
@@ -62,7 +84,7 @@ public class AllCalidadScraper {
 
     public static class Episode {
         public int    id, seasonNumber, episodeNumber;
-        public String title, overview, stillUrl;
+        public String title, overview, stillUrl, code;
     }
 
     public static class Season {
@@ -76,14 +98,12 @@ public class AllCalidadScraper {
 
     public static List<ContentItem> getMovies(int page) throws IOException {
         return parseList(httpGet(
-                API_BASE + "/listing?page=" + page +
-                        "&post_type=movies&posts_per_page=16&genres=&years="));
+                API_BASE + "/items?kind=movie&page=" + page + "&limit=16"));
     }
 
     public static List<ContentItem> getFeaturedMovies() {
-        // Este endpoint es inestable (devuelve 500 a veces); si falla, vacío.
         try {
-            return parseList(httpGet(API_BASE + "/sliders?type=movies&posts_per_page=8"));
+            return parseList(httpGet(API_BASE + "/top?kind=movie&page=1&limit=8"));
         } catch (Exception e) {
             Log.w(TAG, "getFeaturedMovies falló, usando vacío: " + e.getMessage());
             return new ArrayList<>();
@@ -92,8 +112,7 @@ public class AllCalidadScraper {
 
     public static List<ContentItem> getTvShows(int page) throws IOException {
         return parseList(httpGet(
-                API_BASE + "/listing?page=" + page +
-                        "&post_type=tvshows&posts_per_page=16&genres=&years="));
+                API_BASE + "/items?kind=tvshow&page=" + page + "&limit=16"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -102,12 +121,12 @@ public class AllCalidadScraper {
 
     public static List<ContentItem> getPopularMovies() throws IOException {
         return parseList(httpGet(
-                API_BASE + "/tops?range=month&limit=24&post_type=movies"));
+                API_BASE + "/top?kind=movie&page=1&limit=24"));
     }
 
     public static List<ContentItem> getPopularTvShows() throws IOException {
         return parseList(httpGet(
-                API_BASE + "/tops?range=month&limit=24&post_type=tvshows"));
+                API_BASE + "/top?kind=tvshow&page=1&limit=24"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -117,10 +136,10 @@ public class AllCalidadScraper {
     public static List<ContentItem> search(String query, int page) throws IOException {
         String encoded = URLEncoder.encode(query, "UTF-8");
         return parseList(httpGet(
-                API_BASE + "/search?query=" + encoded +
-                        "&page=" + page +
-                        "&post_type=movies%2Ctvshows%2Canimes&posts_per_page=16"));
+                API_BASE + "/search?q=" + encoded + "&page=" + page));
     }
+
+    private static final Map<String, ContentItem> TITLE_MATCH_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * Busca un contenido en AllCalidad por título y año con matching robusto a
@@ -132,24 +151,37 @@ public class AllCalidadScraper {
      */
     public static ContentItem findByTitleAndYear(String title, String year, String mediaType) {
         if (title == null || title.trim().isEmpty()) return null;
+        String cacheKey = (title.trim().toLowerCase(Locale.ROOT) + "|" + (year != null ? year.trim() : "") + "|" + (mediaType != null ? mediaType.trim() : "")).toLowerCase(Locale.ROOT);
+        ContentItem cached = TITLE_MATCH_CACHE.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
         try {
             boolean hasYear = year != null && year.matches("\\d{4}");
             String cleanTitle = stripYear(title);
 
-            // 1) Buscar por palabra clave significativa (el buscador no maneja
-            //    títulos completos en inglés traducidos).
-            String keyword = firstSignificantWord(cleanTitle);
             List<ContentItem> results = new ArrayList<>();
-            addUnique(search(keyword != null ? keyword : cleanTitle, 1), results);
+            // 1) Intentar primero con el título completo limpio
+            addUnique(search(cleanTitle, 1), results);
+            ContentItem best = findBestMatch(results, cleanTitle, hasYear, year, mediaType);
 
-            ContentItem best = findBestMatch(results, cleanTitle, hasYear, year);
-
-            // 2) Fallback: si no hubo match fiable, buscar con el título completo.
-            if (best == null && keyword != null && !keyword.equalsIgnoreCase(cleanTitle)) {
-                addUnique(search(cleanTitle, 1), results);
-                best = findBestMatch(results, cleanTitle, hasYear, year);
+            // 2) Fallback: si no hubo match fiable, buscar por palabras clave significativas
+            // ordenadas por longitud descendente (las más largas y distintivas primero)
+            if (best == null) {
+                List<String> keywords = getSignificantWords(cleanTitle);
+                for (String keyword : keywords) {
+                    if (keyword.equalsIgnoreCase(cleanTitle)) continue;
+                    List<ContentItem> kwResults = search(keyword, 1);
+                    if (kwResults != null && !kwResults.isEmpty()) {
+                        addUnique(kwResults, results);
+                        best = findBestMatch(results, cleanTitle, hasYear, year, mediaType);
+                        if (best != null) break;
+                    }
+                }
             }
-
+            if (best != null) {
+                TITLE_MATCH_CACHE.put(cacheKey, best);
+            }
             return best;
         } catch (Exception e) {
             Log.w(TAG, "findByTitleAndYear falló para " + title + ": " + e.getMessage());
@@ -158,17 +190,28 @@ public class AllCalidadScraper {
     }
 
     private static ContentItem findBestMatch(List<ContentItem> results, String cleanTitle,
-                                             boolean hasYear, String year) {
+                                             boolean hasYear, String year, String mediaType) {
         if (results == null || results.isEmpty()) return null;
         ContentItem best = null;
         int bestRank = 0;
         for (ContentItem item : results) {
             if (item == null) continue;
+
+            // Validación estricta de tipo de contenido (series vs películas)
+            if (!isMediaTypeCompatible(mediaType, item.type)) {
+                continue;
+            }
+
+            // Si ambos tienen año y difieren significativamente, descartar
+            if (hasYear && isYearIncompatible(item.year, year)) {
+                continue;
+            }
+
             int overlap = wordOverlap(cleanTitle, item);
             boolean yearMatch = hasYear && matchesYear(item, year);
-            boolean accept = overlap >= 70 || (yearMatch && overlap >= 40);
+            boolean accept = overlap >= 75 || (yearMatch && overlap >= 45);
             if (accept) {
-                int rank = overlap + (yearMatch ? 20 : 0);
+                int rank = overlap + (yearMatch ? 25 : 0);
                 if (rank > bestRank) {
                     bestRank = rank;
                     best = item;
@@ -176,6 +219,32 @@ public class AllCalidadScraper {
             }
         }
         return best;
+    }
+
+    private static boolean isMediaTypeCompatible(String requestedType, String candidateType) {
+        if (requestedType == null || requestedType.trim().isEmpty()) return true;
+        if (candidateType == null || candidateType.trim().isEmpty()) return true;
+        boolean reqSeries = isSeriesType(requestedType);
+        boolean candSeries = isSeriesType(candidateType);
+        return reqSeries == candSeries;
+    }
+
+    private static boolean isSeriesType(String type) {
+        if (type == null) return false;
+        String t = type.trim().toLowerCase(Locale.ROOT);
+        return "tvshows".equals(t) || "animes".equals(t) || "series".equals(t) || "tv".equals(t);
+    }
+
+    private static boolean isYearIncompatible(String itemYear, String targetYear) {
+        if (itemYear == null || targetYear == null) return false;
+        try {
+            int y1 = Integer.parseInt(itemYear.trim().replaceAll("[^0-9]", ""));
+            int y2 = Integer.parseInt(targetYear.trim().replaceAll("[^0-9]", ""));
+            if (y1 > 1900 && y2 > 1900) {
+                return Math.abs(y1 - y2) > 1;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /** % de palabras clave del título solicitado presentes en el título/original del item. */
@@ -199,7 +268,14 @@ public class AllCalidadScraper {
 
     private static int overlapOf(String q, String t) {
         if (q.isEmpty() || t.isEmpty()) return 0;
-        if (q.equals(t) || t.contains(q) || q.contains(t)) return 100;
+        if (q.equals(t)) return 100;
+
+        if (t.contains(q)) {
+            return Math.max(80, (q.length() * 95) / t.length());
+        }
+        if (q.contains(t)) {
+            return (t.length() * 80) / q.length();
+        }
 
         String[] qw = q.split("\\s+");
         int meaningful = 0;
@@ -213,7 +289,7 @@ public class AllCalidadScraper {
             }
             boolean prefix = false;
             for (String tw : t.split("\\s+")) {
-                if (tw.startsWith(w) || w.startsWith(tw)) {
+                if ((w.length() >= 4 && tw.startsWith(w)) || (tw.length() >= 4 && w.startsWith(tw))) {
                     prefix = true;
                     break;
                 }
@@ -239,16 +315,20 @@ public class AllCalidadScraper {
         return t.isEmpty() ? title.trim() : t;
     }
 
-    /** Primera palabra significativa (≥4 letras, que no sea stopword). */
-    private static String firstSignificantWord(String title) {
-        if (title == null) return null;
+    /** Lista de palabras significativas ordenadas por longitud descendente (las más distintivas primero). */
+    public static List<String> getSignificantWords(String title) {
+        List<String> list = new ArrayList<>();
+        if (title == null) return list;
         String norm = SourceMatcher.normalize(title);
-        if (norm.isEmpty()) return null;
+        if (norm.isEmpty()) return list;
         String[] words = norm.split("\\s+");
         for (String w : words) {
-            if (w.length() >= 4 && !STOP_WORDS.contains(w)) return w;
+            if (w.length() >= 3 && !STOP_WORDS.contains(w) && !list.contains(w)) {
+                list.add(w);
+            }
         }
-        return words[0];
+        Collections.sort(list, (a, b) -> Integer.compare(b.length(), a.length()));
+        return list;
     }
 
     private static void addUnique(List<ContentItem> src, List<ContentItem> dst) {
@@ -281,7 +361,7 @@ public class AllCalidadScraper {
             new java.util.HashSet<>(java.util.Arrays.asList(
                     "the", "and", "of", "for", "with", "from", "una", "uno", "un",
                     "del", "que", "los", "las", "por", "para", "como", "sus",
-                    "con", "de", "la", "el", "en", "y", "a", "an")));
+                    "con", "de", "la", "el", "en", "y", "a", "an", "dos")));
 
     // ─────────────────────────────────────────────────────────────────────────
     // RELACIONADOS / HIT
@@ -293,18 +373,20 @@ public class AllCalidadScraper {
                         "&post_type=movies&posts_per_page=16"));
     }
 
-    // Fix hit() — agregar ?nocache=timestamp
+    // Fix hit() — agregar ?nocache=timestamp (en background no bloqueante)
     public static void hit(int postId, String postType) {
         if (postId <= 0) return;
-        try {
-            String safeType = (postType == null || postType.trim().isEmpty())
-                    ? "movies" : postType.trim();
-            String encodedType = URLEncoder.encode(safeType, "UTF-8");
-            // El sitio real incluye nocache con timestamp para evitar caché
-            String url = API_BASE + "/hit?nocache=" + System.currentTimeMillis()
-                    + "&post_id=" + postId + "&post_type=" + encodedType;
-            httpGet(url);
-        } catch (Exception ignored) { }
+        new Thread(() -> {
+            try {
+                String safeType = (postType == null || postType.trim().isEmpty())
+                        ? "movies" : postType.trim();
+                String encodedType = URLEncoder.encode(safeType, "UTF-8");
+                // El sitio real incluye nocache con timestamp para evitar caché
+                String url = API_BASE + "/hit?nocache=" + System.currentTimeMillis()
+                        + "&post_id=" + postId + "&post_type=" + encodedType;
+                httpGet(url);
+            } catch (Exception ignored) { }
+        }, "hit-worker").start();
     }
 
     public static String getRating(int postId) {
@@ -329,34 +411,117 @@ public class AllCalidadScraper {
     // TEMPORADAS / EPISODIOS
     // ─────────────────────────────────────────────────────────────────────────
 
+    private static final Map<Integer, CachedSeasonEntry> SEASONS_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long SEASONS_CACHE_TTL_MS = 2L * 60L * 60L * 1000L; // 2 horas
+
+    private static class CachedSeasonEntry {
+        final long timestamp;
+        final List<Season> seasons;
+
+        CachedSeasonEntry(List<Season> seasons) {
+            this.timestamp = System.currentTimeMillis();
+            this.seasons = seasons;
+        }
+
+        boolean isValid() {
+            return (System.currentTimeMillis() - timestamp) < SEASONS_CACHE_TTL_MS;
+        }
+    }
+
+    private static List<Season> cloneSeasons(List<Season> original) {
+        if (original == null) return new ArrayList<>();
+        List<Season> copy = new ArrayList<>(original.size());
+        for (Season s : original) {
+            if (s == null) continue;
+            Season sc = new Season();
+            sc.seasonNumber = s.seasonNumber;
+            sc.episodes = new ArrayList<>(s.episodes);
+            copy.add(sc);
+        }
+        return copy;
+    }
+
     public static List<Season> getSeasons(int postId) throws IOException {
+        if (postId <= 0) return new ArrayList<>();
+        CachedSeasonEntry cached = SEASONS_CACHE.get(postId);
+        if (cached != null && cached.isValid() && cached.seasons != null && !cached.seasons.isEmpty()) {
+            return cloneSeasons(cached.seasons);
+        }
+
         List<Season> seasons = new ArrayList<>();
         try {
-            JSONObject root = new JSONObject(httpGet(API_BASE + "/episodes?post_id=" + postId));
-            if (root.optBoolean("error", true)) return seasons;
+            String json = httpGet(API_BASE + "/items/tvshow/" + postId + "/seasons");
+            JSONObject root = new JSONObject(json);
+            JSONArray seasonsArr = root.optJSONArray("seasons");
+            if (seasonsArr != null && seasonsArr.length() > 0) {
+                int totalSeasons = seasonsArr.length();
+                final Season[] seasonResults = new Season[totalSeasons];
+                ExecutorService pool = Executors.newFixedThreadPool(Math.min(4, totalSeasons));
+                List<Future<?>> futures = new ArrayList<>();
 
-            Object data = root.opt("data");
-            if (data instanceof JSONObject) {
-                JSONObject dataObj = (JSONObject) data;
-                JSONArray seasonArray = dataObj.optJSONArray("seasons");
-                if (seasonArray != null) return sortSeasons(parseSeasonList(seasonArray));
-                JSONArray episodesArray = dataObj.optJSONArray("episodes");
-                if (episodesArray != null) {
-                    if (looksLikeSeasonContainerArray(episodesArray))
-                        return sortSeasons(parseSeasonList(episodesArray));
-                    return sortSeasons(groupEpisodesBySeason(episodesArray));
+                for (int i = 0; i < totalSeasons; i++) {
+                    final int sIndex = i;
+                    final JSONObject sObj = seasonsArr.optJSONObject(i);
+                    if (sObj == null) continue;
+                    final int sNum = sObj.optInt("season", i + 1);
+
+                    futures.add(pool.submit(() -> {
+                        try {
+                            Season season = new Season();
+                            season.seasonNumber = sNum;
+                            String epJson = httpGet(API_BASE + "/items/tvshow/" + postId + "/seasons/" + sNum);
+                            JSONObject epRoot = new JSONObject(epJson);
+                            JSONObject sData = epRoot.optJSONObject("season");
+                            if (sData != null) {
+                                JSONArray epArr = sData.optJSONArray("episodes");
+                                if (epArr != null) {
+                                    for (int j = 0; j < epArr.length(); j++) {
+                                        JSONObject epObj = epArr.optJSONObject(j);
+                                        if (epObj == null) continue;
+                                        Episode ep = new Episode();
+                                        ep.id = epObj.optInt("tmdb_id", epObj.optInt("id", 0));
+                                        ep.seasonNumber = epObj.optInt("season", sNum);
+                                        ep.episodeNumber = epObj.optInt("episode", j + 1);
+                                        ep.title = firstNonEmpty(epObj.optString("title"), "Episodio " + ep.episodeNumber);
+                                        ep.overview = epObj.optString("overview");
+                                        ep.stillUrl = tmdbImageUrl(epObj.optString("still_path"), "w780");
+                                        ep.code = epObj.optString("code");
+                                        if (ep.id > 0 && ep.code != null && !ep.code.isEmpty()) {
+                                            MEDIA_CODE_CACHE.put(ep.id, ep.code);
+                                        }
+                                        season.episodes.add(ep);
+                                    }
+                                }
+                            }
+                            if (!season.episodes.isEmpty()) {
+                                seasonResults[sIndex] = season;
+                            }
+                        } catch (Exception ex) {
+                            Log.w(TAG, "Error fetching season " + sNum + " for " + postId + ": " + ex.getMessage());
+                        }
+                    }));
+                }
+
+                for (Future<?> f : futures) {
+                    try { f.get(10, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+                }
+                pool.shutdown();
+
+                for (Season s : seasonResults) {
+                    if (s != null && !s.episodes.isEmpty()) {
+                        seasons.add(s);
+                    }
                 }
             }
-            if (data instanceof JSONArray) {
-                JSONArray dataArray = (JSONArray) data;
-                if (looksLikeSeasonContainerArray(dataArray))
-                    return sortSeasons(parseSeasonList(dataArray));
-                return sortSeasons(groupEpisodesBySeason(dataArray));
-            }
-        } catch (JSONException e) {
-            Log.e(TAG, "Episodes parse error", e);
+        } catch (Exception e) {
+            Log.e(TAG, "Seasons fetch error for " + postId, e);
         }
-        return sortSeasons(seasons);
+
+        List<Season> sorted = sortSeasons(seasons);
+        if (!sorted.isEmpty()) {
+            SEASONS_CACHE.put(postId, new CachedSeasonEntry(sorted));
+        }
+        return cloneSeasons(sorted);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -365,14 +530,40 @@ public class AllCalidadScraper {
 
     public static PlayerData getPlayer(int postId) throws IOException {
         PlayerData playerData = new PlayerData();
+        if (postId <= 0) return playerData;
+
+        // 1. Check code cache (populated during list parsing or season loading)
+        String cachedCode = MEDIA_CODE_CACHE.get(postId);
+        if (cachedCode != null && !cachedCode.isEmpty()) {
+            String embedUrl = "https://vimeos.net/embed-" + cachedCode + ".html";
+            playerData.embedUrl = embedUrl;
+            Server s = new Server();
+            s.name = "Vimeos (HD)";
+            s.url = embedUrl;
+            playerData.servers.add(s);
+            return playerData;
+        }
+
+        // 2. Fetch movie item details from API
         try {
-            JSONObject root = new JSONObject(
-                    httpGet(API_BASE + "/player?post_id=" + postId));
-            if (!root.optBoolean("error", true)) {
-                parsePlayerData(playerData, root.opt("data"));
+            String json = httpGet(API_BASE + "/items/movie/" + postId);
+            JSONObject root = new JSONObject(json);
+            JSONObject item = root.optJSONObject("item");
+            if (item != null) {
+                String code = item.optString("code");
+                if (!code.isEmpty()) {
+                    MEDIA_CODE_CACHE.put(postId, code);
+                    String embedUrl = "https://vimeos.net/embed-" + code + ".html";
+                    playerData.embedUrl = embedUrl;
+                    Server s = new Server();
+                    s.name = "Vimeos (HD)";
+                    s.url = embedUrl;
+                    playerData.servers.add(s);
+                    return playerData;
+                }
             }
-        } catch (JSONException e) {
-            Log.e(TAG, "Player parse error", e);
+        } catch (Exception e) {
+            Log.w(TAG, "getPlayer failed for " + postId + ": " + e.getMessage());
         }
         return playerData;
     }
@@ -383,52 +574,77 @@ public class AllCalidadScraper {
 
     private static List<ContentItem> parseList(String json) {
         List<ContentItem> list = new ArrayList<>();
-        if (json == null || json.isEmpty()) return list;
+        if (json == null || json.trim().isEmpty()) return list;
         try {
             JSONObject root = new JSONObject(json);
-            if (!root.optBoolean("error", true)) {
-                JSONArray posts;
-                if (root.optJSONObject("data") != null &&
-                        root.getJSONObject("data").optJSONArray("posts") != null) {
-                    posts = root.getJSONObject("data").getJSONArray("posts");
+            JSONArray posts = null;
+            if (root.optJSONArray("results") != null) {
+                posts = root.optJSONArray("results");
+            } else if (root.optJSONObject("data") != null &&
+                    root.getJSONObject("data").optJSONArray("posts") != null) {
+                posts = root.getJSONObject("data").getJSONArray("posts");
+            } else if (root.optJSONArray("data") != null) {
+                posts = root.optJSONArray("data");
+            } else if (root.optJSONArray("items") != null) {
+                posts = root.optJSONArray("items");
+            }
+            if (posts == null) return list;
+
+            for (int i = 0; i < posts.length(); i++) {
+                JSONObject post = posts.optJSONObject(i);
+                if (post == null) continue;
+                ContentItem item = new ContentItem();
+                item.id       = optIntFlexible(post, "tmdb_id", "_id", "ID", "post_id", "id");
+                item.title    = htmlDecode(firstNonEmpty(post.optString("title"), post.optString("name")));
+                item.originalTitle = htmlDecode(post.optString("original_title"));
+                item.overview = htmlDecode(firstNonEmpty(post.optString("overview"), post.optString("description")));
+
+                double voteAvg = post.optDouble("vote_average", -1);
+                if (voteAvg >= 0) {
+                    item.rating = String.format(Locale.US, "%.1f", voteAvg);
                 } else {
-                    posts = root.optJSONArray("data");
+                    item.rating = post.optString("rating");
                 }
-                if (posts == null) return list;
 
-                for (int i = 0; i < posts.length(); i++) {
-                    JSONObject post = posts.getJSONObject(i);
-                    ContentItem item = new ContentItem();
-                    item.id       = optIntFlexible(post, "_id", "ID", "post_id", "id");
-                    item.title    = htmlDecode(post.optString("title"));
-                    item.originalTitle = htmlDecode(post.optString("original_title"));
-                    item.overview = htmlDecode(post.optString("overview"));
-                    item.rating   = post.optString("rating");
-                    item.type     = normalizePostType(
-                            firstNonEmpty(post.optString("type"), post.optString("post_type")));
+                item.type     = normalizePostType(
+                        firstNonEmpty(post.optString("kind"), post.optString("type"), post.optString("post_type")));
 
-                    String date = post.optString("release_date");
+                if (post.has("year") && post.optInt("year", 0) > 0) {
+                    item.year = String.valueOf(post.optInt("year"));
+                } else {
+                    String date = firstNonEmpty(post.optString("release_date"), post.optString("first_air_date"));
                     if (date != null && date.length() >= 4) item.year = date.substring(0, 4);
+                }
 
+                String posterPath = firstNonEmpty(post.optString("poster_path"), post.optString("poster"));
+                if (!posterPath.isEmpty()) {
+                    item.posterUrl = tmdbImageUrl(posterPath, "w500");
+                }
+                String backdropPath = firstNonEmpty(post.optString("backdrop_path"), post.optString("backdrop"));
+                if (!backdropPath.isEmpty()) {
+                    item.backdropUrl = tmdbImageUrl(backdropPath, "w780");
+                }
+                if (item.posterUrl == null || item.posterUrl.isEmpty()) {
                     JSONObject images = post.optJSONObject("images");
                     if (images != null) {
                         item.posterUrl   = normalizeUrl(images.optString("poster"));
                         item.backdropUrl = normalizeUrl(images.optString("backdrop"));
                     }
-                    if (item.posterUrl == null || item.posterUrl.isEmpty())
-                        item.posterUrl = normalizeUrl(post.optString("poster"));
-                    if (item.overview == null || item.overview.isEmpty())
-                        item.overview = htmlDecode(post.optString("description"));
-
-                    String slug = post.optString("slug");
-                    if (slug != null && !slug.isEmpty()) {
-                        item.detailUrl = buildDetailUrl(item.type, slug);
-                    } else {
-                        item.detailUrl = normalizeUrl(post.optString("url"));
-                    }
-
-                    if (item.title != null && !item.title.isEmpty()) list.add(item);
                 }
+
+                String slug = post.optString("slug");
+                if (slug != null && !slug.isEmpty()) {
+                    item.detailUrl = buildDetailUrl(item.type, slug, item.id);
+                } else {
+                    item.detailUrl = normalizeUrl(post.optString("url"));
+                }
+
+                item.code = post.optString("code");
+                if (item.id > 0 && item.code != null && !item.code.trim().isEmpty()) {
+                    MEDIA_CODE_CACHE.put(item.id, item.code.trim());
+                }
+
+                if (item.title != null && !item.title.isEmpty()) list.add(item);
             }
         } catch (Exception e) {
             Log.e(TAG, "Parse error", e);
@@ -463,10 +679,12 @@ public class AllCalidadScraper {
                 item.detailUrl!= null ? item.detailUrl: "",
                 0);
         mi.setPostId(item.id);
+        if (item.id > 0) {
+            mi.setTmdbId(item.id);
+        }
         mi.setSynopsis(item.overview != null ? item.overview : "");
         mi.setMediaType(item.type    != null ? item.type     : "movies");
 
-        // ✅ AGREGAR ESTO - Guardar el rating del JSON
         if (item.rating != null && !item.rating.isEmpty()) {
             try {
                 mi.setRating(Double.parseDouble(item.rating));
@@ -609,11 +827,16 @@ public class AllCalidadScraper {
     }
 
     private static String buildDetailUrl(String type, String slug) {
+        return buildDetailUrl(type, slug, 0);
+    }
+
+    private static String buildDetailUrl(String type, String slug, int id) {
         if (slug == null || slug.trim().isEmpty()) return "";
         String nt = normalizePostType(type);
-        if ("tvshows".equals(nt)) return SITE_BASE + "/series/"  + slug + "/";
-        if ("animes".equals(nt))  return SITE_BASE + "/animes/"  + slug + "/";
-        return                           SITE_BASE + "/peliculas/"+ slug + "/";
+        String idPrefix = id > 0 ? (id + "/") : "";
+        if ("tvshows".equals(nt)) return SITE_BASE + "/serie/"  + idPrefix + slug;
+        if ("animes".equals(nt))  return SITE_BASE + "/anime/"  + idPrefix + slug;
+        return                           SITE_BASE + "/pelicula/"+ idPrefix + slug;
     }
 
     private static void parsePlayerData(PlayerData pd, Object dataObj) throws JSONException {
@@ -707,15 +930,27 @@ public class AllCalidadScraper {
         if (chosenUrl == null || chosenUrl.isEmpty()) return;
 
         pd.embedUrl = chosenUrl;
-        if (pd.servers == null) {
-            pd.servers = new ArrayList<>();
-        } else {
-            pd.servers.clear();
+        List<Server> reordered = new ArrayList<>();
+        Set<String> seenUrls = new java.util.HashSet<>();
+
+        Server firstServer = new Server();
+        firstServer.name = (chosenName == null || chosenName.isEmpty()) ? "Servidor 1" : chosenName;
+        firstServer.url = chosenUrl;
+        reordered.add(firstServer);
+        seenUrls.add(chosenUrl.toLowerCase(Locale.ROOT));
+
+        if (pd.servers != null) {
+            for (Server s : pd.servers) {
+                if (s == null || s.url == null || s.url.trim().isEmpty()) continue;
+                String normalized = s.url.trim();
+                if (isDeprecatedServerUrl(normalized)) continue;
+                if (!seenUrls.contains(normalized.toLowerCase(Locale.ROOT))) {
+                    seenUrls.add(normalized.toLowerCase(Locale.ROOT));
+                    reordered.add(s);
+                }
+            }
         }
-        Server only = new Server();
-        only.name = (chosenName == null || chosenName.isEmpty()) ? "Servidor 1" : chosenName;
-        only.url = chosenUrl;
-        pd.servers.add(only);
+        pd.servers = reordered;
     }
 
     private static boolean isPreferredServer(String name, String url) {
@@ -830,7 +1065,14 @@ public class AllCalidadScraper {
             String line;
             while ((line = br.readLine()) != null) sb.append(line);
             br.close();
-            return sb.toString();
+            String body = sb.toString();
+            String trimmed = body.trim();
+            if (trimmed.startsWith("<!doctype") || trimmed.startsWith("<html")
+                    || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+                Log.w(TAG, "Non-JSON response received from " + urlString);
+                throw new IOException("Non-JSON response received from " + urlString);
+            }
+            return trimmed;
 
         } finally {
             if (br   != null) try { br.close();   } catch (IOException ignored) {}   // ← cerrar siempre

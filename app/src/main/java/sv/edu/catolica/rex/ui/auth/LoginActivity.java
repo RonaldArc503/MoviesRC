@@ -76,7 +76,17 @@ public class LoginActivity extends AppCompatActivity {
             tvToggleMode.setText(isRegisterMode
                     ? "¿Ya tienes cuenta? Inicia sesión"
                     : "¿No tienes cuenta? Regístrate");
+            if (sv.edu.catolica.rex.utils.TvUtils.isTv(this)) {
+                TextInputLayout firstInput = isRegisterMode ? inputNameLayout : inputEmail;
+                if (firstInput.getEditText() != null) {
+                    firstInput.getEditText().requestFocus();
+                }
+            }
         });
+
+        if (sv.edu.catolica.rex.utils.TvUtils.isTv(this) && inputEmail.getEditText() != null) {
+            inputEmail.getEditText().requestFocus();
+        }
     }
 
     private void performAuth() {
@@ -169,6 +179,7 @@ public class LoginActivity extends AppCompatActivity {
     /** Registra en Logcat el client_id y el SHA-1 del certificado de firma,
      *  para verificar que coincidan con los registrados en Firebase Console. */
     private void logGoogleConfigDiagnostics() {
+        if (!sv.edu.catolica.rex.BuildConfig.DEBUG) return;
         try {
             String clientId = authManager.getGoogleClientId(this);
             android.util.Log.d("GoogleSignIn", "default_web_client_id=" + clientId);

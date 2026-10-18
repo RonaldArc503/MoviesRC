@@ -35,6 +35,15 @@ public class AllCalidadSource implements ContentSource {
     public SmartPlaybackResult resolveMovie(MediaItem item) throws Exception {
         if (item == null) return new SmartPlaybackResult();
         int postId = Math.max(0, item.getPostId());
+        if (postId <= 0 && item.getTitulo() != null && !item.getTitulo().trim().isEmpty()) {
+            try {
+                AllCalidadScraper.ContentItem found = AllCalidadScraper.findByTitleAndYear(
+                        item.getTitulo(), item.getAnio(), item.getMediaType());
+                if (found != null && found.id > 0) {
+                    postId = found.id;
+                }
+            } catch (Exception ignored) { }
+        }
         if (postId <= 0) return new SmartPlaybackResult();
         AllCalidadScraper.PlayerData player = AllCalidadScraper.getPlayer(postId);
         SmartPlaybackResult r = new SmartPlaybackResult();
@@ -45,7 +54,38 @@ public class AllCalidadSource implements ContentSource {
 
     @Override
     public SmartPlaybackResult resolveEpisode(MediaItem item, int season, int episode) throws Exception {
-        // AllCalidad resolves episodes via episodePostId; not implemented here
+        if (item == null) return new SmartPlaybackResult();
+        int postId = Math.max(0, item.getPostId());
+        if (postId <= 0 && item.getTitulo() != null && !item.getTitulo().trim().isEmpty()) {
+            try {
+                AllCalidadScraper.ContentItem found = AllCalidadScraper.findByTitleAndYear(
+                        item.getTitulo(), item.getAnio(), item.getMediaType());
+                if (found != null && found.id > 0) {
+                    postId = found.id;
+                }
+            } catch (Exception ignored) { }
+        }
+        if (postId <= 0) return new SmartPlaybackResult();
+        try {
+            List<AllCalidadScraper.Season> seasons = AllCalidadScraper.getSeasons(postId);
+            if (seasons != null) {
+                int targetSeason = season > 0 ? season : 1;
+                int targetEpisode = episode > 0 ? episode : 1;
+                for (AllCalidadScraper.Season s : seasons) {
+                    if (s != null && s.seasonNumber == targetSeason && s.episodes != null) {
+                        for (AllCalidadScraper.Episode ep : s.episodes) {
+                            if (ep != null && ep.episodeNumber == targetEpisode && ep.id > 0) {
+                                AllCalidadScraper.PlayerData player = AllCalidadScraper.getPlayer(ep.id);
+                                SmartPlaybackResult r = new SmartPlaybackResult();
+                                r.providerName = "AllCalidadApi";
+                                for (String u : AllCalidadScraper.getPlayableUrls(player)) r.hostUrls.add(u);
+                                return r;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) { }
         return new SmartPlaybackResult();
     }
 }

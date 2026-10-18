@@ -34,8 +34,30 @@ public class SyncQueueManager {
     }
 
     public void enqueue(SyncOperation op) {
+        if (op == null) return;
         List<SyncOperation> queue = getPending();
+        if (SyncOperation.TYPE_SAVE_CONTINUE_WATCHING.equals(op.getType())) {
+            try {
+                sv.edu.catolica.rex.models.ContinueWatchingItem newItem =
+                        gson.fromJson(op.getPayloadJson(), sv.edu.catolica.rex.models.ContinueWatchingItem.class);
+                if (newItem != null && newItem.getContentId() != null) {
+                    queue.removeIf(existing -> {
+                        if (!SyncOperation.TYPE_SAVE_CONTINUE_WATCHING.equals(existing.getType())) return false;
+                        try {
+                            sv.edu.catolica.rex.models.ContinueWatchingItem oldItem =
+                                    gson.fromJson(existing.getPayloadJson(), sv.edu.catolica.rex.models.ContinueWatchingItem.class);
+                            return oldItem != null && newItem.getContentId().equals(oldItem.getContentId());
+                        } catch (Exception ignored) {
+                            return false;
+                        }
+                    });
+                }
+            } catch (Exception ignored) {}
+        }
         queue.add(op);
+        while (queue.size() > 30) {
+            queue.remove(0);
+        }
         saveQueue(queue);
     }
 
@@ -43,7 +65,9 @@ public class SyncQueueManager {
         String json = prefs.getString(KEY_QUEUE, "[]");
         Type type = new TypeToken<List<SyncOperation>>(){}.getType();
         List<SyncOperation> list = gson.fromJson(json, type);
-        return list != null ? list : new ArrayList<>();
+        if (list == null) return new ArrayList<>();
+        list.removeIf(op -> op == null || !shouldRetry(op));
+        return list;
     }
 
     public boolean hasPending() {
@@ -51,8 +75,18 @@ public class SyncQueueManager {
     }
 
     public void removeProcessed(List<SyncOperation> processed) {
+        if (processed == null || processed.isEmpty()) return;
         List<SyncOperation> queue = getPending();
-        queue.removeAll(processed);
+        queue.removeIf(item -> {
+            if (item == null) return true;
+            for (SyncOperation p : processed) {
+                if (p == null) continue;
+                if (item.equals(p) || (item.getId() != null && item.getId().equals(p.getId()))) {
+                    return true;
+                }
+            }
+            return false;
+        });
         saveQueue(queue);
     }
 

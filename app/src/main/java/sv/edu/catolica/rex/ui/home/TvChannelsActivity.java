@@ -109,6 +109,13 @@ public class TvChannelsActivity extends AppCompatActivity {
         bindChip(chipMovies, TvChannelsRepository.CATEGORY_MOVIES);
         bindChip(chipReligion, TvChannelsRepository.CATEGORY_RELIGION);
         bindChip(chipInternacional, TvChannelsRepository.CATEGORY_INTERNACIONAL);
+
+        if (chipAll != null) chipAll.setNextFocusDownId(R.id.rv_tv_channels);
+        if (chipNacionales != null) chipNacionales.setNextFocusDownId(R.id.rv_tv_channels);
+        if (chipNoticias != null) chipNoticias.setNextFocusDownId(R.id.rv_tv_channels);
+        if (chipMovies != null) chipMovies.setNextFocusDownId(R.id.rv_tv_channels);
+        if (chipReligion != null) chipReligion.setNextFocusDownId(R.id.rv_tv_channels);
+        if (chipInternacional != null) chipInternacional.setNextFocusDownId(R.id.rv_tv_channels);
     }
 
     private void bindChip(TextView chip, String category) {
@@ -120,9 +127,6 @@ public class TvChannelsActivity extends AppCompatActivity {
                     .scaleY(hasFocus ? 1.08f : 1.0f)
                     .setDuration(120L)
                     .start();
-            if (hasFocus) {
-                selectCategory(category);
-            }
         });
     }
 

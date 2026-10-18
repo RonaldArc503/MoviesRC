@@ -8,6 +8,7 @@ public class ContinueWatchingItem {
     private String imageUrl;
     private String detailUrl;
     private String mediaType;
+    private String source;
     private int postId;
     private int tmdbId;
 
@@ -19,6 +20,9 @@ public class ContinueWatchingItem {
     private long durationMs;
     private int progressPercent;
     private boolean completed;
+    /** Conserva que el contenido ya se completó aunque el usuario inicie una
+     * nueva reproducción desde cero. */
+    private boolean everCompleted;
 
     private long lastPlayedAt;
 
@@ -41,6 +45,9 @@ public class ContinueWatchingItem {
 
     public String getMediaType() { return mediaType; }
     public void setMediaType(String mediaType) { this.mediaType = mediaType; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
 
     public int getPostId() { return postId; }
     public void setPostId(int postId) { this.postId = postId; }
@@ -68,6 +75,9 @@ public class ContinueWatchingItem {
 
     public boolean isCompleted() { return completed; }
     public void setCompleted(boolean completed) { this.completed = completed; }
+
+    public boolean isEverCompleted() { return everCompleted; }
+    public void setEverCompleted(boolean everCompleted) { this.everCompleted = everCompleted; }
 
     public long getLastPlayedAt() { return lastPlayedAt; }
     public void setLastPlayedAt(long lastPlayedAt) { this.lastPlayedAt = lastPlayedAt; }

@@ -56,7 +56,6 @@ public class FootballActivity extends AppCompatActivity {
         emptyView = findViewById(R.id.tv_empty_state);
 
         rvMatches.setLayoutManager(new LinearLayoutManager(this));
-        rvMatches.setHasFixedSize(true);
         adapter = new FootballMatchAdapter(new ArrayList<>(), this::showStreamsDialog);
         rvMatches.setAdapter(adapter);
 
@@ -310,6 +309,15 @@ public class FootballActivity extends AppCompatActivity {
                 metaView = itemView.findViewById(R.id.tv_match_meta);
                 streamCountView = itemView.findViewById(R.id.tv_match_streams);
                 playButton = itemView.findViewById(R.id.btn_play_streams);
+
+                itemView.setOnFocusChangeListener((v, hasFocus) -> {
+                    v.animate()
+                            .scaleX(hasFocus ? 1.03f : 1.0f)
+                            .scaleY(hasFocus ? 1.03f : 1.0f)
+                            .setDuration(120L)
+                            .start();
+                    v.setSelected(hasFocus);
+                });
             }
 
             void bind(FootballMatch match, OnMatchClickListener listener) {

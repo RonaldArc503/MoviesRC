@@ -28,6 +28,7 @@
                 android:contentDescription="@string/app_name"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
+                android:nextFocusDown="@+id/search_view"
                 android:padding="12dp"
                 android:src="@drawable/ic_arrow_back"
                 android:tint="#FFFFFF" />
@@ -50,6 +51,8 @@
             android:background="@drawable/bg_search_dark"
             android:focusable="true"
             android:focusableInTouchMode="true"
+            android:nextFocusUp="@+id/btn_back"
+            android:nextFocusDown="@+id/rv_home_sections"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
             app:iconifiedByDefault="false"
@@ -63,6 +66,7 @@
             android:layout_weight="1"
             android:clipToPadding="false"
             android:overScrollMode="never"
+            android:nextFocusUp="@+id/search_view"
             android:paddingTop="12dp"
             android:paddingBottom="24dp" />
 

@@ -10,6 +10,15 @@ public class FavoriteItem {
     private String mediaType;
     private Timestamp addedAt;
 
+    private String backdrop;
+    private String detailUrl;
+    private String fuente;
+    private String anio;
+    private double rating;
+    private int postId;
+    private int tmdbId;
+    private String synopsis;
+
     public FavoriteItem() {
     }
 
@@ -35,4 +44,28 @@ public class FavoriteItem {
 
     public Timestamp getAddedAt() { return addedAt; }
     public void setAddedAt(Timestamp addedAt) { this.addedAt = addedAt; }
+
+    public String getBackdrop() { return backdrop; }
+    public void setBackdrop(String backdrop) { this.backdrop = backdrop; }
+
+    public String getDetailUrl() { return detailUrl; }
+    public void setDetailUrl(String detailUrl) { this.detailUrl = detailUrl; }
+
+    public String getFuente() { return fuente; }
+    public void setFuente(String fuente) { this.fuente = fuente; }
+
+    public String getAnio() { return anio; }
+    public void setAnio(String anio) { this.anio = anio; }
+
+    public double getRating() { return rating; }
+    public void setRating(double rating) { this.rating = rating; }
+
+    public int getPostId() { return postId; }
+    public void setPostId(int postId) { this.postId = postId; }
+
+    public int getTmdbId() { return tmdbId; }
+    public void setTmdbId(int tmdbId) { this.tmdbId = tmdbId; }
+
+    public String getSynopsis() { return synopsis; }
+    public void setSynopsis(String synopsis) { this.synopsis = synopsis; }
 }

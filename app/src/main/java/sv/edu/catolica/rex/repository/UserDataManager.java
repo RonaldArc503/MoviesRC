@@ -13,11 +13,15 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
+import android.content.SharedPreferences;
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -26,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.models.FavoriteItem;
+import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.PersonalList;
 import sv.edu.catolica.rex.models.UserData;
 import sv.edu.catolica.rex.models.UserSettings;
@@ -59,7 +64,7 @@ public class UserDataManager {
     private final ExecutorService syncExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ConcurrentHashMap<String, Long> lastSyncTimestamps = new ConcurrentHashMap<>();
-    private static final long SYNC_THROTTLE_MS = 30_000L;
+    private static final long SYNC_THROTTLE_MS = 60_000L;
     private final AtomicBoolean isLocalSyncInProgress = new AtomicBoolean(false);
 
     public interface RestoreCallback {
@@ -82,6 +87,7 @@ public class UserDataManager {
                 com.google.firebase.firestore.FirebaseFirestore.getInstance());
         this.syncQueue = SyncQueueManager.getInstance(context);
         this.cwStore = new ContinueWatchingStore();
+        loadFavoritesFromLocal();
     }
 
     public static synchronized UserDataManager getInstance(Context context) {
@@ -110,6 +116,10 @@ public class UserDataManager {
             } catch (Exception ignored) {}
             try {
                 context.getSharedPreferences("user_metadata", Context.MODE_PRIVATE)
+                        .edit().clear().apply();
+            } catch (Exception ignored) {}
+            try {
+                context.getSharedPreferences("rex_favorites_cache", Context.MODE_PRIVATE)
                         .edit().clear().apply();
             } catch (Exception ignored) {}
         }
@@ -222,6 +232,7 @@ public class UserDataManager {
         }
         if (remote.getFavorites() != null) {
             favoritesCache = new ArrayList<>(remote.getFavorites());
+            saveFavoritesToLocal();
         }
         if (remote.getHistory() != null) {
             historyCache = new ArrayList<>(remote.getHistory());
@@ -286,7 +297,7 @@ public class UserDataManager {
 
     private void processRemoteUpdate(UserData remote) {
         resolveAndApply(remote);
-        if (!isLocalSyncInProgress.get()) {
+        if (!isLocalSyncInProgress.get() && syncQueue.hasPending()) {
             syncExecutor.execute(this::processPendingQueue);
         }
     }
@@ -302,13 +313,20 @@ public class UserDataManager {
     }
 
     public void onLocalDataChanged(String uid, String type, Object payload) {
-        syncQueue.enqueue(new SyncOperation(type, payload));
-        if (restoreComplete && shouldSyncNow(type, payload)) {
+        if (!shouldSyncNow(type, payload)) {
+            return;
+        }
+        SyncOperation op = new SyncOperation(type, payload);
+        syncQueue.enqueue(op);
+        if (restoreComplete) {
             String uidCopy = uid;
             syncExecutor.execute(() -> {
                 isLocalSyncInProgress.set(true);
                 try {
-                    syncImmediately(uidCopy, type, payload);
+                    boolean ok = syncImmediately(uidCopy, type, payload);
+                    if (ok) {
+                        syncQueue.removeProcessed(java.util.Collections.singletonList(op));
+                    }
                 } finally {
                     isLocalSyncInProgress.set(false);
                 }
@@ -332,7 +350,7 @@ public class UserDataManager {
         return true;
     }
 
-    private void syncImmediately(String uid, String type, Object payload) {
+    private boolean syncImmediately(String uid, String type, Object payload) {
         try {
             switch (type) {
                 case SyncOperation.TYPE_SAVE_CONTINUE_WATCHING:
@@ -365,8 +383,10 @@ public class UserDataManager {
                     }
                     break;
             }
+            return true;
         } catch (Exception e) {
             Log.w(TAG, "syncImmediately failed for " + type + ", queued for retry", e);
+            return false;
         }
     }
 
@@ -378,15 +398,26 @@ public class UserDataManager {
         String uid = user.getUid();
         Gson gson = new Gson();
         List<SyncOperation> pending = syncQueue.getPending();
+        if (pending.isEmpty()) return;
         List<SyncOperation> processed = new ArrayList<>();
 
         for (SyncOperation op : pending) {
+            if (op == null) continue;
             try {
                 Object payload = deserializePayload(op.getType(), op.getPayloadJson(), gson);
                 if (payload != null) {
-                    syncImmediately(uid, op.getType(), payload);
+                    boolean ok = syncImmediately(uid, op.getType(), payload);
+                    if (ok) {
+                        processed.add(op);
+                    } else {
+                        op.incrementRetries();
+                        if (!syncQueue.shouldRetry(op)) {
+                            processed.add(op);
+                        }
+                    }
+                } else {
+                    processed.add(op);
                 }
-                processed.add(op);
             } catch (Exception e) {
                 op.incrementRetries();
                 if (!syncQueue.shouldRetry(op)) {
@@ -425,6 +456,122 @@ public class UserDataManager {
         syncExecutor.execute(this::processPendingQueue);
     }
 
+    public static boolean isSeriesType(String mediaType) {
+        if (mediaType == null) return false;
+        String type = mediaType.toLowerCase(Locale.ROOT);
+        return type.contains("tv") || type.contains("series") || type.contains("dorama")
+                || type.contains("anime") || type.contains("novela");
+    }
+
+    public static String buildFavoriteId(MediaItem item) {
+        if (item == null) return "";
+        boolean isSeries = isSeriesType(item.getMediaType());
+        if (item.getPostId() > 0) {
+            return (isSeries ? "tv_" : "post_") + item.getPostId();
+        }
+        if (item.getTmdbId() > 0) {
+            return (isSeries ? "tmdb_tv_" : "tmdb_movie_") + item.getTmdbId();
+        }
+        if (item.getDetailUrl() != null && !item.getDetailUrl().isEmpty()) {
+            return (isSeries ? "tv_url_" : "movie_url_") + Math.abs(item.getDetailUrl().hashCode());
+        }
+        return (isSeries ? "tv_" : "post_") + Math.abs((item.getTitulo() != null ? item.getTitulo() : "").hashCode());
+    }
+
+    public boolean matchesFavorite(MediaItem item, FavoriteItem f) {
+        if (item == null || f == null) return false;
+        String favId = buildFavoriteId(item);
+        if (favId.equals(f.getContentId())) return true;
+        if (item.getPostId() > 0 && f.getPostId() > 0 && item.getPostId() == f.getPostId()) return true;
+        if (item.getTmdbId() > 0 && f.getTmdbId() > 0 && item.getTmdbId() == f.getTmdbId()) return true;
+        if (item.getDetailUrl() != null && !item.getDetailUrl().isEmpty() && item.getDetailUrl().equals(f.getDetailUrl())) return true;
+        if (item.getTitulo() != null && f.getTitle() != null
+                && item.getTitulo().trim().equalsIgnoreCase(f.getTitle().trim())) {
+            if (item.getMediaType() != null && f.getMediaType() != null) {
+                return isSeriesType(item.getMediaType()) == isSeriesType(f.getMediaType());
+            }
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isFavorite(MediaItem item) {
+        if (item == null) return false;
+        for (FavoriteItem f : favoritesCache) {
+            if (matchesFavorite(item, f)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void addToFavorites(MediaItem mediaItem) {
+        if (mediaItem == null) return;
+        FirebaseUser user = firebaseAuth.getCurrentUser();
+        if (user == null) return;
+
+        if (isFavorite(mediaItem)) return;
+
+        String favId = buildFavoriteId(mediaItem);
+        FavoriteItem item = new FavoriteItem(favId, mediaItem.getTitulo(), mediaItem.getImagen(), mediaItem.getMediaType());
+        item.setBackdrop(mediaItem.getBackdrop());
+        item.setDetailUrl(mediaItem.getDetailUrl());
+        item.setFuente(mediaItem.getFuente());
+        item.setAnio(mediaItem.getAnio());
+        item.setRating(mediaItem.getRating());
+        item.setPostId(mediaItem.getPostId());
+        item.setTmdbId(mediaItem.getTmdbId());
+        item.setSynopsis(mediaItem.getSynopsis());
+
+        List<FavoriteItem> updated = new ArrayList<>(favoritesCache);
+        updated.add(0, item);
+        favoritesCache = updated;
+        saveFavoritesToLocal();
+        notifyListeners();
+
+        onLocalDataChanged(user.getUid(), SyncOperation.TYPE_ADD_FAVORITE, item);
+    }
+
+    public void removeFromFavorites(MediaItem mediaItem) {
+        if (mediaItem == null) return;
+        FirebaseUser user = firebaseAuth.getCurrentUser();
+        if (user == null) return;
+
+        FavoriteItem match = null;
+        for (FavoriteItem f : favoritesCache) {
+            if (matchesFavorite(mediaItem, f)) {
+                match = f;
+                break;
+            }
+        }
+
+        String targetId = match != null && match.getContentId() != null
+                ? match.getContentId()
+                : buildFavoriteId(mediaItem);
+
+        List<FavoriteItem> updated = new ArrayList<>(favoritesCache);
+        if (match != null) {
+            updated.remove(match);
+        } else {
+            updated.removeIf(f -> matchesFavorite(mediaItem, f));
+        }
+        favoritesCache = updated;
+        saveFavoritesToLocal();
+        notifyListeners();
+
+        onLocalDataChanged(user.getUid(), SyncOperation.TYPE_REMOVE_FAVORITE, targetId);
+    }
+
+    public boolean toggleFavorite(MediaItem mediaItem) {
+        if (isFavorite(mediaItem)) {
+            removeFromFavorites(mediaItem);
+            return false;
+        } else {
+            addToFavorites(mediaItem);
+            return true;
+        }
+    }
+
     public void addToFavorites(String contentId, String title, String imageUrl, String mediaType) {
         FirebaseUser user = firebaseAuth.getCurrentUser();
         if (user == null) return;
@@ -433,8 +580,9 @@ public class UserDataManager {
 
         FavoriteItem item = new FavoriteItem(contentId, title, imageUrl, mediaType);
         List<FavoriteItem> updated = new ArrayList<>(favoritesCache);
-        updated.add(item);
+        updated.add(0, item);
         favoritesCache = updated;
+        saveFavoritesToLocal();
         notifyListeners();
 
         onLocalDataChanged(user.getUid(), SyncOperation.TYPE_ADD_FAVORITE, item);
@@ -447,9 +595,36 @@ public class UserDataManager {
         List<FavoriteItem> updated = new ArrayList<>(favoritesCache);
         updated.removeIf(f -> contentId.equals(f.getContentId()));
         favoritesCache = updated;
+        saveFavoritesToLocal();
         notifyListeners();
 
         onLocalDataChanged(user.getUid(), SyncOperation.TYPE_REMOVE_FAVORITE, contentId);
+    }
+
+    private void loadFavoritesFromLocal() {
+        try {
+            SharedPreferences sp = appContext.getSharedPreferences("rex_favorites_cache", Context.MODE_PRIVATE);
+            String json = sp.getString("favorites_json", null);
+            if (json != null && !json.isEmpty()) {
+                Type type = new TypeToken<List<FavoriteItem>>() {}.getType();
+                List<FavoriteItem> loaded = new Gson().fromJson(json, type);
+                if (loaded != null) {
+                    favoritesCache = new ArrayList<>(loaded);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Error loading favorites from local cache", e);
+        }
+    }
+
+    private void saveFavoritesToLocal() {
+        try {
+            SharedPreferences sp = appContext.getSharedPreferences("rex_favorites_cache", Context.MODE_PRIVATE);
+            String json = new Gson().toJson(favoritesCache);
+            sp.edit().putString("favorites_json", json).apply();
+        } catch (Exception e) {
+            Log.w(TAG, "Error saving favorites to local cache", e);
+        }
     }
 
     public void addToHistory(String contentId, String title, String imageUrl, String mediaType) {

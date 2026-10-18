@@ -149,7 +149,7 @@
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/menu_football"
+            android:id="@+id/menu_novelas"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
@@ -162,41 +162,14 @@
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
-                android:src="@drawable/ic_sports"
+                android:src="@drawable/ic_novelas"
                 android:tint="@color/bottom_nav_tint" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="Deportes"
-                android:textColor="@color/bottom_nav_tint"
-                android:textSize="10sp"
-                android:maxLines="1" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/menu_categorias"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="@drawable/bg_nav_item_touch"
-            android:clickable="true"
-            android:focusable="false"
-            android:gravity="center"
-            android:orientation="vertical">
-
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:src="@drawable/ic_grid"
-                android:tint="@color/bottom_nav_tint" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Categorías"
+                android:text="Novelas"
                 android:textColor="@color/bottom_nav_tint"
                 android:textSize="10sp"
                 android:maxLines="1" />
@@ -240,12 +213,12 @@
             android:focusable="false"
             android:gravity="center"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:visibility="visible">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
-                android:src="@drawable/ic_tv"
+                android:src="@drawable/ic_doramas"
                 android:tint="@color/bottom_nav_tint" />
 
             <TextView

@@ -52,6 +52,8 @@
         android:paddingBottom="8dp"
         android:text="Ver streams"
         android:textAllCaps="false"
-        android:textColor="#FFFFFF" />
+        android:textColor="#FFFFFF"
+        android:focusable="false"
+        android:clickable="false" />
 
 </LinearLayout>

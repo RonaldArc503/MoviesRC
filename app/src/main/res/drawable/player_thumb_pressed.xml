@@ -4,11 +4,11 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:fillColor="@color/player_thumb_border"
+        android:fillColor="@color/player_accent_red"
         android:pathData="M12,12m-10,0a10,10 0,1 1,20 0a10,10 0,1 1,-20 0" />
     <path
         android:fillColor="@android:color/transparent"
-        android:strokeColor="@color/player_thumb_ring"
+        android:strokeColor="#4DFFFFFF"
         android:strokeWidth="2"
         android:pathData="M12,12m-9,0a9,9 0,1 1,18 0a9,9 0,1 1,-18 0" />
 </vector>

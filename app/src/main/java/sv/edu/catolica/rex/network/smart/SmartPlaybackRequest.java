@@ -8,12 +8,14 @@ public class SmartPlaybackRequest {
     public int postId;
     public int episodePostId;
     public String mediaType;
+    public String year;
+    public String source;
     public SmartContentType contentType;
     public int seasonNumber;
     public int episodeNumber;
 
     public boolean isEpisodeRequest() {
-        return seasonNumber > 0 && episodeNumber > 0;
+        return seasonNumber > 0 && episodeNumber > 0 && contentType != SmartContentType.MOVIE;
     }
 
     public String cacheKey() {

@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -28,12 +29,21 @@ import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.util.Log;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.webkit.JavaScriptReplyProxy;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -41,6 +51,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.models.ContinueWatchingItem;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
@@ -48,6 +60,7 @@ import sv.edu.catolica.rex.storage.ContinueWatchingStore;
 
 public class PlayerContenidoActivity extends AppCompatActivity {
 
+    private static final String TAG = "PlayerContenidoActivity";
     private static final String EXTRA_URL = "url";
     private static final String EXTRA_URLS = "urls";
     private static final String EXTRA_TITLE = "title";
@@ -66,7 +79,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private static final long RETRY_DELAY_MS = 700L;
     private static final long PLAYBACK_POLL_INTERVAL_MS = 2000L;
     private static final long PLAYBACK_POLL_INTERVAL_SLOW_MS = 5000L;
-    private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 300d;
+    private static final double NEXT_EPISODE_BUTTON_REMAINING_SEC = 180d;
     private static final boolean SHOW_NEXT_EPISODE_BUTTON = true;
     private static final double NEXT_EPISODE_HIDE_HYSTERESIS_SEC = 12d;
     private static final double AUTO_NEXT_REMAINING_SEC = 1.2d;
@@ -84,6 +97,11 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private ProgressBar progressBar;
     private Button nextEpisodeButton;
     private TextView nextEpisodeLoaderText;
+    private Button skipIntroButton;
+    private boolean skipIntroVisible = false;
+    private boolean introSkipped = false;
+    private double currentIntroEndSec = -1;
+    private double lastCurrentTimeSec = 0d;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private ArrayList<String> serverUrls = new ArrayList<>();
     private int currentServerIndex = 0;
@@ -106,6 +124,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private boolean nextButtonVisible = false;
     private boolean isTransitioningToNextEpisode = false;
     private boolean autoNextTriggeredForCurrent = false;
+    private boolean nextEpisodeQueuedInStore = false;
     private boolean resumed = false;
     private boolean isTvDevice = false;
     private boolean adOverlaysCleaned = false;
@@ -119,11 +138,17 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     private long resumePositionMs = 0;
     private double lastSavedPositionSec = -1;
+    private long lastRemoteSaveElapsedMs = 0;
     private boolean positionRestored = false;
+    private JavaScriptReplyProxy doramaFrame;
+    private long doramaFrameSeenAtMs = 0;
     private long contentDurationMs = 0;
     private String contentId = "";
     private String imageUrl = "";
+    private String seriesSource = "";
+    private String seriesDetailUrl = "";
     private boolean disableExoSwitch = false;
+    private volatile boolean isExiting = false;
 
     /** Guarda el progreso en un hilo de fondo para no saturar el main thread
      *  con Gson/SharedPreferences mientras el video se está reproduciendo. */
@@ -148,6 +173,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private long lastVideoDurationMs = 0;
     private long lastVideoTapUpMs = 0L;
     private float lastVideoTapX = -1f;
+    private PlayerDoubleTapHelper doubleTapHelper;
+    private volatile boolean isVideoPlaying = false;
+    private static final long PLAYBACK_WATCHDOG_MS = 20000L;
+    private Runnable playbackWatchdogRunnable;
 
     private final Runnable playbackMonitorRunnable = new Runnable() {
         @Override
@@ -165,6 +194,12 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     /** Intervalo adaptativo: cuando el video se reproduce con controles ocultos
      *  se espacia el polling para reducir la presión de JS sobre el renderer. */
     private long currentPollInterval() {
+        if (skipIntroVisible) {
+            return 1000L;
+        }
+        if (lastCurrentTimeSec < 240d) {
+            return 1500L;
+        }
         if (pageLoaded && !controlsVisible && lastVideoDurationMs > 0) {
             return PLAYBACK_POLL_INTERVAL_SLOW_MS;
         }
@@ -277,6 +312,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         enterImmersiveMode();
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_player_contenido);
         isTvDevice = isTelevision();
 
@@ -284,6 +320,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         progressBar = findViewById(R.id.progressBar);
         nextEpisodeButton = findViewById(R.id.btn_next_episode);
         nextEpisodeLoaderText = findViewById(R.id.tv_next_loader);
+        skipIntroButton = findViewById(R.id.btn_skip_intro);
         initControls();
 
         ArrayList<String> urls = getIntent().getStringArrayListExtra(EXTRA_URLS);
@@ -293,6 +330,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         seriesTitle = getIntent().getStringExtra(EXTRA_SERIES_TITLE);
         seriesPostId = getIntent().getIntExtra(EXTRA_SERIES_POST_ID, -1);
         seriesPostType = getIntent().getStringExtra(EXTRA_SERIES_POST_TYPE);
+        seriesSource = getIntent().getStringExtra("series_source");
+        seriesDetailUrl = getIntent().getStringExtra("series_detail_url");
         currentEpisodeId = getIntent().getIntExtra(EXTRA_EPISODE_ID, -1);
         currentSeasonNumber = getIntent().getIntExtra(EXTRA_SEASON_NUMBER, -1);
         currentEpisodeNumber = getIntent().getIntExtra(EXTRA_EPISODE_NUMBER, -1);
@@ -319,31 +358,74 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
         serverUrls = filterDeprecatedServers(serverUrls);
 
+        setupNextEpisodeButton();
+        setupSkipIntroButton();
+        if (isSeriesEpisodePlayback()) {
+            refreshNextEpisodeFromCache();
+        }
+        setupWebView();
+
         if (serverUrls.isEmpty()) {
-            setPlaybackResult();
-            finish();
+            resolveInitialPlaybackUrls();
             return;
         }
 
+        startPlayingLoadedUrls();
+    }
+
+    private void startPlayingLoadedUrls() {
         disableExoSwitch = getIntent().getBooleanExtra("disable_exo_switch", false);
 
         if (!disableExoSwitch) {
             ArrayList<String> directStreamUrls = extractDirectStreamUrls(serverUrls);
             if (!directStreamUrls.isEmpty()) {
-                String embedReferer = originOf(!serverUrls.isEmpty() ? serverUrls.get(0) : null);
-                PlayerExoActivity.start(this, directStreamUrls, title,
-                        contentId, seriesTitle, imageUrl,
-                        seriesPostId, seriesPostType,
-                        currentEpisodeId, currentSeasonNumber, currentEpisodeNumber,
-                        resumePositionMs, null, embedReferer);
+                String embedReferer = isTuDoramaSource() ? "https://tudorama.com/"
+                        : originOf(!serverUrls.isEmpty() ? serverUrls.get(0) : null);
+                Intent exoIntent = new Intent(this, PlayerExoActivity.class);
+                exoIntent.putStringArrayListExtra(EXTRA_URLS, directStreamUrls);
+                exoIntent.putStringArrayListExtra("exo_urls", directStreamUrls);
+                String playTitle = getTitle() != null ? getTitle().toString() : seriesTitle;
+                exoIntent.putExtra(EXTRA_TITLE, playTitle);
+                exoIntent.putExtra("exo_title", playTitle);
+                exoIntent.putExtra("content_id", contentId);
+                exoIntent.putExtra("exo_content_id", contentId);
+                exoIntent.putExtra("series_title", seriesTitle);
+                exoIntent.putExtra("exo_series_title", seriesTitle);
+                exoIntent.putExtra("image_url", imageUrl);
+                exoIntent.putExtra("exo_image_url", imageUrl);
+                exoIntent.putExtra("post_id", seriesPostId);
+                exoIntent.putExtra("exo_post_id", seriesPostId);
+                exoIntent.putExtra("media_type", seriesPostType);
+                exoIntent.putExtra("exo_media_type", seriesPostType);
+                exoIntent.putExtra("episode_id", currentEpisodeId);
+                exoIntent.putExtra("exo_episode_id", currentEpisodeId);
+                exoIntent.putExtra("season_number", currentSeasonNumber);
+                exoIntent.putExtra("exo_season_number", currentSeasonNumber);
+                exoIntent.putExtra("episode_number", currentEpisodeNumber);
+                exoIntent.putExtra("exo_episode_number", currentEpisodeNumber);
+                exoIntent.putExtra("resume_position_ms", resumePositionMs);
+                exoIntent.putExtra("exo_resume_position_ms", resumePositionMs);
+                exoIntent.putExtra("series_source", seriesSource);
+                exoIntent.putExtra("exo_series_source", seriesSource);
+                exoIntent.putExtra("series_detail_url", seriesDetailUrl);
+                exoIntent.putExtra("exo_series_detail_url", seriesDetailUrl);
+                if (isTuDoramaSource()) {
+                    exoIntent.putStringArrayListExtra("exo_fallback_embed_urls",
+                            extractEmbedUrls(serverUrls));
+                }
+                if (embedReferer != null) {
+                    exoIntent.putExtra("referer", embedReferer);
+                    exoIntent.putExtra("origin", embedReferer);
+                    exoIntent.putExtra("exo_referer", embedReferer);
+                    exoIntent.putExtra("exo_origin", embedReferer);
+                }
+                startActivity(exoIntent);
                 setPlaybackResult();
                 finish();
                 return;
             }
         }
 
-        setupNextEpisodeButton();
-        setupWebView();
         loadCurrentServer();
 
         if (isSeriesEpisodePlayback()) {
@@ -351,8 +433,121 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
     }
 
+    private void resolveInitialPlaybackUrls() {
+        showPlaybackStatus("Conectando con servidores...");
+        new Thread(() -> {
+            try {
+                List<String> urls = new ArrayList<>();
+                boolean isSeries = isSeriesEpisodePlayback();
+
+                // 1) Si es Canela TV / Novelas
+                boolean isNovelas = (seriesSource != null && ("novelas".equalsIgnoreCase(seriesSource) || "canela".equalsIgnoreCase(seriesSource)))
+                        || (seriesDetailUrl != null && seriesDetailUrl.contains("canela.tv"));
+                if (isNovelas) {
+                    try {
+                        sv.edu.catolica.rex.network.smart.CanelaScraper canelaScraper =
+                                new sv.edu.catolica.rex.network.smart.CanelaScraper();
+                        sv.edu.catolica.rex.models.MediaItem item = new sv.edu.catolica.rex.models.MediaItem(
+                                seriesTitle, "", imageUrl != null ? imageUrl : "",
+                                seriesDetailUrl != null ? seriesDetailUrl : "", seriesPostId);
+                        item.setMediaType(seriesPostType != null ? seriesPostType : (isSeries ? "tvshows" : "movies"));
+                        item.setFuente(seriesSource != null ? seriesSource : "novelas");
+                        sv.edu.catolica.rex.network.smart.SmartPlaybackResult canelaResult = isSeries
+                                ? canelaScraper.resolveEpisode(item, currentSeasonNumber, currentEpisodeNumber, currentEpisodeId)
+                                : canelaScraper.resolveMovie(item);
+                        if (canelaResult != null && canelaResult.hasPlayableUrls()) {
+                            urls = canelaResult.toPlayableUrls();
+                        } else if (isSeries) {
+                            // Si se catalogó como serie pero no tiene episodios, intentar como película
+                            canelaResult = canelaScraper.resolveMovie(item);
+                            if (canelaResult != null && canelaResult.hasPlayableUrls()) {
+                                urls = canelaResult.toPlayableUrls();
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                // 2) Si es AllCalidad
+                boolean isAllCalidad = !isNovelas && seriesPostId > 0
+                        && (seriesSource == null || seriesSource.isEmpty() || "allcalidad".equalsIgnoreCase(seriesSource));
+                if (isAllCalidad && currentEpisodeId > 0) {
+                    try {
+                        AllCalidadScraper.hit(currentEpisodeId, "episodes");
+                        urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(currentEpisodeId));
+                    } catch (Exception ignored) {}
+                } else if (isAllCalidad && !isSeries && seriesPostId > 0) {
+                    try {
+                        AllCalidadScraper.hit(seriesPostId, seriesPostType != null ? seriesPostType : "movies");
+                        urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(seriesPostId));
+                    } catch (Exception ignored) {}
+                }
+
+                // 2) SmartScraperEngine (Caché instantáneo o multi-fuente)
+                if (urls == null || urls.isEmpty()) {
+                    try {
+                        sv.edu.catolica.rex.network.smart.SmartScraperEngine engine =
+                                new sv.edu.catolica.rex.network.smart.SmartScraperEngine();
+                        String playTitle = seriesTitle != null && !seriesTitle.isEmpty()
+                                ? seriesTitle : (getTitle() != null ? getTitle().toString() : "");
+                        sv.edu.catolica.rex.models.MediaItem item = new sv.edu.catolica.rex.models.MediaItem(
+                                playTitle, "", imageUrl != null ? imageUrl : "",
+                                seriesDetailUrl != null ? seriesDetailUrl : "", seriesPostId);
+                        item.setMediaType(seriesPostType != null ? seriesPostType : (isSeries ? "tvshows" : "movies"));
+                        item.setFuente(seriesSource);
+
+                        urls = isSeries
+                                ? engine.resolveEpisodeUrls(PlayerContenidoActivity.this, item, currentSeasonNumber, currentEpisodeNumber, currentEpisodeId)
+                                : engine.resolveMovieUrls(PlayerContenidoActivity.this, item);
+                    } catch (Exception ignored) {}
+                }
+
+                final List<String> resolvedUrls = urls;
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+
+                    hidePlaybackStatus();
+                    if (resolvedUrls == null || resolvedUrls.isEmpty()) {
+                        Toast.makeText(PlayerContenidoActivity.this, "No hay servidores disponibles para este contenido", Toast.LENGTH_LONG).show();
+                        setPlaybackResult();
+                        finish();
+                        return;
+                    }
+
+                    serverUrls.clear();
+                    serverUrls.addAll(resolvedUrls);
+                    serverUrls = filterDeprecatedServers(serverUrls);
+
+                    if (serverUrls.isEmpty()) {
+                        Toast.makeText(PlayerContenidoActivity.this, "No hay servidores disponibles", Toast.LENGTH_SHORT).show();
+                        setPlaybackResult();
+                        finish();
+                        return;
+                    }
+
+                    startPlayingLoadedUrls();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    hidePlaybackStatus();
+                    Toast.makeText(PlayerContenidoActivity.this, "Error al conectar con los servidores", Toast.LENGTH_SHORT).show();
+                    setPlaybackResult();
+                    finish();
+                });
+            }
+        }).start();
+    }
+
     private boolean isSeriesEpisodePlayback() {
-        return seriesPostId > 0 && currentEpisodeId > 0;
+        return (currentSeasonNumber > 0 && currentEpisodeNumber > 0)
+                || currentEpisodeId > 0
+                || (seriesPostId > 0 && isSeriesType(seriesPostType));
+    }
+
+    private boolean isSeriesType(String type) {
+        if (type == null) return false;
+        String t = type.trim().toLowerCase(Locale.ROOT);
+        return "tvshows".equals(t) || "animes".equals(t) || "series".equals(t) || "tv".equals(t);
     }
 
     private void setupNextEpisodeButton() {
@@ -364,16 +559,160 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         nextEpisodeButton.setOnClickListener(v -> playNextEpisode(false));
     }
 
+    private void setupSkipIntroButton() {
+        if (skipIntroButton == null) {
+            return;
+        }
+        skipIntroButton.setText("Saltar intro");
+        skipIntroButton.setVisibility(View.GONE);
+        skipIntroButton.bringToFront();
+        skipIntroButton.setOnClickListener(v -> skipIntro());
+    }
+
+    private void skipIntro() {
+        if (webView == null || isFinishing() || isDestroyed()) {
+            return;
+        }
+        introSkipped = true;
+        final double targetSec = currentIntroEndSec;
+        hideSkipIntroButton(true);
+
+        String skipJs = "(function(){"
+                + "try{"
+                + "  var clicked=false;"
+                + "  var btn=document.querySelector('.skip-option.intro, [class*=\"skip-option\"][class*=\"intro\"], .player-skip-options .intro, [class*=\"skipintro\"], [class*=\"skip-intro\"]');"
+                + "  if(btn){"
+                + "    try{btn.click();clicked=true;}catch(e){}"
+                + "    try{btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));clicked=true;}catch(e2){}"
+                + "  }"
+                + "  if(!clicked){"
+                + "    try{"
+                + "      var ifrs=document.querySelectorAll('iframe');"
+                + "      for(var ifi=0;ifi<ifrs.length;ifi++){"
+                + "        var idoc=ifrs[ifi].contentDocument||(ifrs[ifi].contentWindow&&ifrs[ifi].contentWindow.document);"
+                + "        if(idoc){"
+                + "          var ibtn=idoc.querySelector('.skip-option.intro, [class*=\"skip-option\"][class*=\"intro\"], .player-skip-options .intro, [class*=\"skipintro\"], [class*=\"skip-intro\"]');"
+                + "          if(ibtn){"
+                + "            try{ibtn.click();clicked=true;}catch(e){}"
+                + "            try{ibtn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));clicked=true;}catch(e2){}"
+                + "            if(clicked)break;"
+                + "          }"
+                + "        }"
+                + "      }"
+                + "    }catch(e){}"
+                + "  }"
+                + "  var t=" + targetSec + ";"
+                + "  if(t>0){"
+                + "    var v=document.querySelector('video');"
+                + "    if(v){v.currentTime=t;clicked=true;}"
+                + "    if(window.jwplayer){try{window.jwplayer().seek(t);clicked=true;}catch(e){}}"
+                + "  } else {"
+                + "    setTimeout(function(){"
+                + "      try{"
+                + "        var b2=document.querySelector('.skip-option.intro, [class*=\"skip-option\"][class*=\"intro\"], .player-skip-options .intro');"
+                + "        if(b2){b2.click();b2.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));}"
+                + "      }catch(e){}"
+                + "    },250);"
+                + "  }"
+                + "  return clicked;"
+                + "}catch(e){return false;}"
+                + "})();";
+
+        webView.evaluateJavascript(skipJs, val -> {
+            try {
+                Toast.makeText(PlayerContenidoActivity.this, "Intro saltada", Toast.LENGTH_SHORT).show();
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void showSkipIntroButton(double introEnd) {
+        if (skipIntroButton == null || isFinishing() || isDestroyed() || nextButtonVisible) {
+            return;
+        }
+        if (introEnd > 0) {
+            currentIntroEndSec = introEnd;
+        }
+        if (skipIntroVisible && skipIntroButton.getVisibility() == View.VISIBLE) {
+            return;
+        }
+
+        skipIntroVisible = true;
+        skipIntroButton.bringToFront();
+        skipIntroButton.setVisibility(View.VISIBLE);
+        skipIntroButton.setAlpha(0f);
+        skipIntroButton.animate().alpha(1f).setDuration(180L).start();
+        if (isTvDevice) {
+            skipIntroButton.requestFocus();
+        }
+    }
+
+    private void hideSkipIntroButton(boolean immediate) {
+        if (skipIntroButton == null) {
+            return;
+        }
+        if (!skipIntroVisible && skipIntroButton.getVisibility() != View.VISIBLE) {
+            return;
+        }
+
+        skipIntroVisible = false;
+        if (immediate) {
+            skipIntroButton.animate().cancel();
+            skipIntroButton.setAlpha(0f);
+            skipIntroButton.setVisibility(View.GONE);
+            return;
+        }
+
+        skipIntroButton.animate()
+                .alpha(0f)
+                .setDuration(120L)
+                .withEndAction(() -> {
+                    if (!skipIntroVisible) {
+                        skipIntroButton.setVisibility(View.GONE);
+                    }
+                })
+                .start();
+    }
+
+    private void preconfigureCookiesForCanela() {
+        try {
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && webView != null) {
+                cm.setAcceptThirdPartyCookies(webView, true);
+            }
+            String nowIso = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(new java.util.Date());
+            cm.setCookie("https://canela.tv", "OptanonAlertBoxClosed=" + nowIso + "; domain=.canela.tv; path=/");
+            cm.setCookie("https://canela.tv", "OptanonConsent=isGpcEnabled=0&datestamp=" + nowIso + "&version=202401.1.0&isIABGlobal=false&hosts=&landingPath=NotLandingPage&groups=C0001%3A1%2CC0002%3A1%2CC0003%3A1%2CC0004%3A1; domain=.canela.tv; path=/");
+            cm.flush();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void setupWebView() {
+        android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(webView, true);
+        }
+        preconfigureCookiesForCanela();
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        try {
+            String defaultUa = settings.getUserAgentString();
+            if (defaultUa != null && defaultUa.contains("; wv")) {
+                settings.setUserAgentString(defaultUa.replace("; wv", ""));
+            }
+        } catch (Exception ignored) {
+        }
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setAllowFileAccessFromFileURLs(true);
-        settings.setAllowUniversalAccessFromFileURLs(true);
+        settings.setSupportMultipleWindows(true);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
         }
@@ -388,52 +727,74 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(false);
         webView.setOnLongClickListener(v -> true);
+        webView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void onPlayerBack() {
+                handler.post(() -> finishWithResult());
+            }
+        }, "RexPlayerBridge");
+        installDoramaFrameBridge();
         webView.setWebViewClient(new WebViewClient() {
 
             @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request != null && request.getUrl() != null ? request.getUrl().toString() : "";
+                return handleUrlNavigation(url);
+            }
+
+            @SuppressWarnings("deprecation")
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleUrlNavigation(url);
+            }
+
+            @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                if (isExiting || isFinishing() || isDestroyed()) return;
+                if (isTuDoramaSource()) Log.i(TAG, "TuDorama cargando: " + Uri.parse(url).getHost());
                 pageLoaded = false;
+                doramaFrame = null;
+                doramaFrameSeenAtMs = 0;
                 adOverlaysCleaned = false;
+                isVideoPlaying = false;
+                lastVideoDurationMs = 0;
+                cancelPlaybackWatchdog();
                 progressBar.setVisibility(View.VISIBLE);
                 showPlaybackStatus("Loading playback...");
                 failoverInProgress = false;
                 hideNextEpisodeButton(true);
+                hideSkipIntroButton(true);
+                currentIntroEndSec = -1;
+                introSkipped = false;
                 handler.removeCallbacks(autoPlayRunnable);
                 handler.removeCallbacks(playbackMonitorRunnable);
 
-                // Resetear flags para nueva pÃ¡gina
+                // Resetear flags para nueva página
                 if (webView != null) {
                     webView.evaluateJavascript(
                             "try{window.__rexDone=false;window.__rexVidDone=false;}catch(e){}", null
                     );
                 }
 
-                // Neutralizar protecciÃ³n anti-embed de vidhide/minochinos
-                // El script del host detecta sandbox/iframe y redirige a /sandboxed.html
-                if (webView != null) {
-                    webView.evaluateJavascript(
-                            "try{"
-                            + "Object.defineProperty(document,'domain',{get:function(){return location.hostname;},set:function(v){}});"
-                            + "if(!window.__rexSandboxPatched){"
-                            + "  window.__rexSandboxPatched=true;"
-                            + "  var origTimeout=window.setTimeout;"
-                            + "  window.setTimeout=function(fn,ms){"
-                            + "    var s=(typeof fn==='function'?fn.toString():(typeof fn==='string'?fn:''));"
-                            + "    if(s.indexOf('sandboxed')!==-1||s.indexOf('/sandboxed')!==-1)return 0;"
-                            + "    return origTimeout.apply(this,arguments);"
-                            + "  };"
-                            + "}"
-                            + "}catch(e){}", null
-                    );
-                }
-
+                injectPlayerBridge();
                 injectHideVideoControls();
-
                 scheduleServerTimeout();
             }
 
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (request != null && request.getUrl() != null && isTvDevice && !disableExoSwitch && !exoSwitchInProgress) {
+                    String reqUrl = request.getUrl().toString();
+                    if (isPlaylistStreamUrl(reqUrl)) {
+                        handler.post(() -> switchToExoPlayer(reqUrl));
+                    }
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
+                if (isExiting || isFinishing() || isDestroyed()) return;
                 pageLoaded = true;
                 handler.postDelayed(() -> showControls(), 1000);
                 currentServerRetry = 0;
@@ -445,45 +806,38 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 isTransitioningToNextEpisode = false;
                 autoNextTriggeredForCurrent = false;
 
-                // Inyectar script para bloquear redirecciÃ³n a sandboxed
-                if (webView != null) {
-                    webView.evaluateJavascript(
-                            "try{"
-                            + "var sandboxFrames=document.querySelectorAll('iframe[src*=\"sandboxed\"]');"
-                            + "for(var i=0;i<sandboxFrames.length;i++){sandboxFrames[i].parentNode.removeChild(sandboxFrames[i]);}"
-                            + "}catch(e){}", null
-                    );
-                }
-
                 applyJwFullscreenFix(url);
+                injectPlayerBridge();
                 injectHideVideoControls();
+                disableWebSubtitlesForAllCalidad();
 
                 triggerAutoPlayAttempts();
                 startPlaybackMonitor();
                 schedulePositionRestore();
-                if (isTvDevice) {
-                    scheduleTvControlsHide();
-                }
+                schedulePlaybackWatchdog();
             }
-
-
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (isExiting || isFinishing() || isDestroyed()) return;
                 if (request != null && request.isForMainFrame()) {
+                    if (isTuDoramaSource()) Log.w(TAG, "TuDorama error WebView: " + error.getErrorCode());
                     handleServerFailure();
                 }
             }
 
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                if (isExiting || isFinishing() || isDestroyed()) return;
                 if (request != null && request.isForMainFrame() && errorResponse != null && errorResponse.getStatusCode() >= 400) {
+                    if (isTuDoramaSource()) Log.w(TAG, "TuDorama HTTP " + errorResponse.getStatusCode());
                     handleServerFailure();
                 }
             }
 
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                if (isExiting || isFinishing() || isDestroyed()) return;
                 String current = currentServerIndex < serverUrls.size() ? serverUrls.get(currentServerIndex) : "";
                 if (failingUrl != null && failingUrl.equals(current)) {
                     handleServerFailure();
@@ -491,9 +845,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             }
         });
 
-
-
         webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
+                // Bloquear ventanas emergentes de anuncios (popunders / popups)
+                return false;
+            }
+
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
                 if (callback != null) callback.onCustomViewHidden();
@@ -508,88 +866,199 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             public void onHideCustomView() {
             }
         });
+
         webView.setOnTouchListener((v, event) -> {
-            if (event == null) {
+            if (event == null || isExiting || isFinishing() || isDestroyed()) {
                 return false;
             }
             int action = event.getActionMasked();
+
             if (action == MotionEvent.ACTION_DOWN) {
                 enterImmersiveMode();
-                // Limpiar overlays de anuncios una sola vez por página (evita
-                // inyectar JS pesado en cada toque).
                 if (pageLoaded && !adOverlaysCleaned) {
                     adOverlaysCleaned = true;
                     removeAdOverlays();
+                }
+                if (isVideoPlaying || lastVideoDurationMs > 0) {
+                    return true;
+                }
+                return false;
+            } else if (action == MotionEvent.ACTION_UP) {
+                if (handleVideoSurfaceTap(v, event)) {
+                    return true;
+                }
+                // Si el video ya está reproduciéndose:
+                // Solo alternar los controles nativos de la app y NO propagar el toque al WebView
+                // para que ningún clickjacker o anuncio del sitio web se active al tocar la pantalla.
+                if (isVideoPlaying || lastVideoDurationMs > 0) {
+                    toggleControls();
+                    return true;
+                } else {
+                    // Si el video aún no ha iniciado:
+                    // Limpiar overlays transparentes antes de pasar el toque para que inicie la reproducción
+                    removeAdOverlays();
                     showControls();
-                } else if (pageLoaded) {
-                    showControls();
+                    return false;
                 }
             }
-            if (action == MotionEvent.ACTION_UP && handleVideoSurfaceTap(v, event)) {
-                return true;
-            }
-            return false;
+            return isVideoPlaying || lastVideoDurationMs > 0;
         });
         webView.setVisibility(android.view.View.VISIBLE);
     }
 
-    private boolean handleVideoSurfaceTap(View surface, MotionEvent event) {
-        long now = event.getEventTime();
-        int doubleTapTimeout = android.view.ViewConfiguration.getDoubleTapTimeout();
-        float maxDistance = 80f * getResources().getDisplayMetrics().density;
-        boolean doubleTap = lastVideoTapUpMs > 0
-                && now - lastVideoTapUpMs <= doubleTapTimeout
-                && Math.abs(event.getX() - lastVideoTapX) <= maxDistance;
+    private boolean isTuDoramaSource() {
+        return "tudorama".equalsIgnoreCase(seriesSource)
+                || (seriesDetailUrl != null && seriesDetailUrl.contains("tudorama.com"));
+    }
 
-        lastVideoTapUpMs = now;
-        lastVideoTapX = event.getX();
+    private void installDoramaFrameBridge() {
+        if (!isTuDoramaSource() || webView == null) return;
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+                || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            Log.w(TAG, "WebView no admite control de frames TuDorama");
+            return;
+        }
+        HashSet<String> origins = new HashSet<>(Arrays.asList(
+                "https://bysesukior.com", "https://n1mwq.org", "https://hgcloud.to",
+                "https://minochinos.com", "https://abyssplayer.com",
+                "https://cdn.tudorama.com", "https://pixeldrain.com"));
+        try {
+            WebViewCompat.addWebMessageListener(webView, "RexDoramaFrame", origins,
+                    (view, message, sourceOrigin, isMainFrame, replyProxy) -> {
+                        if (isExiting || sourceOrigin == null || message == null) return;
+                        String host = sourceOrigin.getHost();
+                        if (host == null || !isTrustedDoramaFrame(host)) return;
+                        String data = message.getData();
+                        if (data == null || data.length() > 1000) return;
+                        try {
+                            JSONObject state = new JSONObject(data);
+                            if (!state.optBoolean("hasMedia", false)) return;
+                            double position = state.optDouble("currentTime", -1);
+                            double duration = state.optDouble("duration", -1);
+                            if (!Double.isFinite(position) || position < 0 || position > 86400
+                                    || !Double.isFinite(duration) || duration < 0 || duration > 86400) return;
+                            if (doramaFrame == null) {
+                                Log.i(TAG, "Control TuDorama activo en " + host);
+                            }
+                            doramaFrame = replyProxy;
+                            doramaFrameSeenAtMs = android.os.SystemClock.elapsedRealtime();
+                            handlePlaybackProbe(data);
+                        } catch (JSONException ignored) {
+                        }
+                    });
+            StringBuilder script = new StringBuilder("window.__rexResumeSec=")
+                    .append(resumePositionMs / 1000.0).append(';');
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    getAssets().open("tudorama_frame_bridge.js"), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) script.append(line).append('\n');
+            }
+            WebViewCompat.addDocumentStartJavaScript(webView, script.toString(), origins);
+            Log.i(TAG, "Control de frames TuDorama instalado");
+        } catch (Exception e) {
+            Log.w(TAG, "No se pudo iniciar control de frames TuDorama", e);
+        }
+    }
 
-        if (!doubleTap) {
+    private boolean isTrustedDoramaFrame(String host) {
+        return "bysesukior.com".equals(host) || "n1mwq.org".equals(host)
+                || "hgcloud.to".equals(host) || "minochinos.com".equals(host)
+                || "abyssplayer.com".equals(host) || "cdn.tudorama.com".equals(host)
+                || "pixeldrain.com".equals(host);
+    }
+
+    private boolean sendDoramaFrameCommand(String type, double seconds) {
+        if (!isTuDoramaSource() || doramaFrame == null
+                || android.os.SystemClock.elapsedRealtime() - doramaFrameSeenAtMs > 5000L) return false;
+        try {
+            JSONObject command = new JSONObject();
+            command.put("type", type);
+            command.put("seconds", seconds);
+            doramaFrame.postMessage(command.toString());
+            return true;
+        } catch (Exception e) {
             return false;
         }
+    }
 
-        lastVideoTapUpMs = 0L;
-        if (event.getX() < surface.getWidth() / 2f) {
-            webViewSkip(-10000);
-            Toast.makeText(this, "-10 s", Toast.LENGTH_SHORT).show();
-        } else {
-            webViewSkip(10000);
-            Toast.makeText(this, "+10 s", Toast.LENGTH_SHORT).show();
-        }
-        showControls();
-        return true;
+    private void injectPlayerBridge() {
+        if (webView == null || isExiting || isFinishing() || isDestroyed()) return;
+        String bridgeJs = "(function(){"
+                + "try{"
+                + "  if(window.__rexBridgeInjected) return;"
+                + "  window.__rexBridgeInjected = true;"
+                + "  function triggerBack(){"
+                + "    try{"
+                + "      if(window.RexPlayerBridge && window.RexPlayerBridge.onPlayerBack){"
+                + "        window.RexPlayerBridge.onPlayerBack();"
+                + "      }"
+                + "    }catch(e){}"
+                + "  }"
+                + "  function attachBackListeners(doc){"
+                + "    if(!doc) return;"
+                + "    try{"
+                + "      doc.addEventListener('click', function(e){"
+                + "        var el = e.target;"
+                + "        while(el && el !== doc.body && el !== doc.documentElement){"
+                + "          var cls = (el.className || '').toString().toLowerCase();"
+                + "          if(cls.indexOf('playback') !== -1 || cls.indexOf('background') !== -1 || cls.indexOf('backdrop') !== -1 || cls.indexOf('feedback') !== -1 || cls.indexOf('fallback') !== -1){"
+                + "            el = el.parentElement; continue;"
+                + "          }"
+                + "          var tag = (el.tagName || '').toLowerCase();"
+                + "          var aria = (el.getAttribute('aria-label') || '').toLowerCase();"
+                + "          var title = (el.getAttribute('title') || '').toLowerCase();"
+                + "          var id = (el.id || '').toLowerCase();"
+                + "          var isBackBtn = false;"
+                + "          if(/\\b(btn-back|button-back|arrow-back|back-btn|back-button|player-back|vjs-close-button|jw-svg-icon-close)\\b/.test(cls)){"
+                + "            isBackBtn = true;"
+                + "          } else if(/\\b(btn-back|button-back|back-btn|back-button)\\b/.test(id)){"
+                + "            isBackBtn = true;"
+                + "          } else if((tag === 'button' || tag === 'a' || tag === 'svg' || tag === 'i') && (aria === 'volver' || aria === 'regresar' || aria === 'atrás' || aria === 'atras' || aria === 'back' || aria === 'close' || aria === 'cerrar')){"
+                + "            isBackBtn = true;"
+                + "          } else if((tag === 'button' || tag === 'a') && (title === 'volver' || title === 'regresar' || title === 'atrás' || title === 'atras' || title === 'back' || title === 'close' || title === 'cerrar')){"
+                + "            isBackBtn = true;"
+                + "          }"
+                + "          if(isBackBtn){"
+                + "            e.preventDefault();"
+                + "            e.stopPropagation();"
+                + "            e.stopImmediatePropagation();"
+                + "            triggerBack();"
+                + "            return false;"
+                + "          }"
+                + "          el = el.parentElement;"
+                + "        }"
+                + "      }, true);"
+                + "    }catch(e){}"
+                + "  }"
+                + "  attachBackListeners(document);"
+                + "  try{"
+                + "    var iframes = document.querySelectorAll('iframe');"
+                + "    for(var i=0; i<iframes.length; i++){"
+                + "      var idoc = iframes[i].contentDocument || (iframes[i].contentWindow && iframes[i].contentWindow.document);"
+                + "      if(idoc) attachBackListeners(idoc);"
+                + "    }"
+                + "  }catch(e){}"
+                + "}catch(e){}"
+                + "})();";
+        webView.evaluateJavascript(bridgeJs, null);
+    }
+
+    private boolean handleVideoSurfaceTap(View surface, MotionEvent event) {
+        return false;
     }
 
     private void removeAdOverlays() {
-        if (webView == null) return;
-        webView.evaluateJavascript(
-                "(function(){"
-                + "try{"
-                // Bloquear window.open para evitar popups de anuncios
-                + "if(!window.__rexOpenBlocked){window.__rexOpenBlocked=true;window.open=function(){return null;};}"
-                // Eliminar divs invisibles de anuncios (creados por pickDirect/directlink)
-                + "var allDivs=document.querySelectorAll('div[style*=\"z-index\"][style*=\"fixed\"]');"
-                + "for(var i=0;i<allDivs.length;i++){"
-                + "  var s=allDivs[i].style;"
-                + "  if(s.zIndex>2000000000||s.opacity==='0.01'||s.cssText.indexOf('opacity:0.01')!==-1){"
-                + "    allDivs[i].parentNode.removeChild(allDivs[i]);"
-                + "  }"
-                + "}"
-                // Desactivar pickDirect para que no cree mÃ¡s overlays
-                + "if(typeof pickDirect!=='undefined'){window.pickDirect=function(){};}"
-                + "}catch(e){}"
-                + "})();", null
-        );
+        // Bloqueador de anuncios deshabilitado a petición del usuario para pruebas
     }
 
     private void triggerAutoPlayAttempts() {
         handler.removeCallbacks(autoPlayRunnable);
-        // Intentos suaves y espaciados: menos inyecciones de JS = menos presión
-        // sobre el renderer y menos riesgo de interrumpir la reproducción.
-        handler.postDelayed(autoPlayRunnable, 150L);
-        handler.postDelayed(autoPlayRunnable, 1500L);
-        handler.postDelayed(autoPlayRunnable, 4000L);
-        handler.postDelayed(autoPlayRunnable, 8000L);
+        // Intentos rápidos y precisos para arranque inmediato en Android TV
+        handler.postDelayed(autoPlayRunnable, 80L);
+        handler.postDelayed(autoPlayRunnable, 400L);
+        handler.postDelayed(autoPlayRunnable, 1000L);
+        handler.postDelayed(autoPlayRunnable, 2200L);
+        handler.postDelayed(autoPlayRunnable, 4500L);
     }
 
     private void requestAutoPlay() {
@@ -603,8 +1072,45 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "var isVidHide=host.indexOf('minochinos.com')!==-1"
                 + "  ||host.indexOf('hglink.to')!==-1"
                 + "  ||host.indexOf('bysedikamoum.com')!==-1"
-                + "  ||host.indexOf('voe.sx')!==-1"
-                + "  ||host.indexOf('voe.network')!==-1;"
+                + "  ||host.indexOf('vidhide')!==-1"
+                + "  ||host.indexOf('streamwish')!==-1"
+                + "  ||host.indexOf('wishembed')!==-1"
+                + "  ||host.indexOf('filemoon')!==-1"
+                + "  ||host.indexOf('vimeos.net')!==-1;"
+                + "var isCanela=host.indexOf('canela.tv')!==-1;"
+                + "if(isCanela){"
+                + "  try{"
+                + "    var b=document.getElementById('onetrust-accept-btn-handler')||document.getElementById('accept-recommended-btn-handler');"
+                + "    if(b){try{b.click();}catch(e){}}"
+                + "    var btns=document.querySelectorAll('button, a, [role=\"button\"], input[type=\"button\"], div.ot-sdk-button');"
+                + "    for(var bi=0;bi<btns.length;bi++){"
+                + "      var txt=(btns[bi].textContent||btns[bi].innerText||btns[bi].value||'').toLowerCase().trim();"
+                + "      if(txt==='aceptar todas'||txt==='aceptar todo'||txt==='aceptar todas las cookies'||txt.indexOf('aceptar todas')!==-1||txt.indexOf('aceptar todo')!==-1||txt==='solo necesarias'||txt==='sólo necesarias'||txt.indexOf('solo necesarias')!==-1||txt.indexOf('sólo necesarias')!==-1||txt==='accept all'||txt==='reject all'){"
+                + "        try{btns[bi].click();btns[bi].dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));}catch(e){}"
+                + "      }"
+                + "    }"
+                + "    var rb=document.getElementById('onetrust-reject-all-handler')||document.querySelector('.ot-pc-refuse-all-handler');"
+                + "    if(rb){try{rb.click();}catch(e){}}"
+                + "    var ots=document.getElementById('onetrust-style');if(ots)try{ots.remove();}catch(e){}"
+                + "    var bads=document.querySelectorAll('#onetrust-consent-sdk,#onetrust-banner-sdk,.onetrust-pc-dark-filter,.ot-sdk-container,[id*=\"onetrust\"],[class*=\"onetrust\"],div[id*=\"consent\"],div[class*=\"consent\"],div[class*=\"cookie-banner\"]');"
+                + "    for(var bj=0;bj<bads.length;bj++){try{bads[bj].remove();}catch(e){try{bads[bj].style.display='none';}catch(e2){}}}"
+                + "    if(window.localStorage)try{localStorage.setItem('OptanonAlertBoxClosed',new Date().toISOString());}catch(e){}"
+                + "  }catch(e){}"
+                + "  var vids=document.querySelectorAll('video');"
+                + "  for(var vi=0;vi<vids.length;vi++){"
+                + "    try{"
+                + "      var cv=vids[vi];"
+                + "      cv.muted=false;cv.volume=1;"
+                + "      if(cv.paused){"
+                + "        var p=cv.play();"
+                + "        if(p&&p.catch){"
+                + "          p.catch(function(){cv.muted=true;var p2=cv.play();if(p2&&p2.catch)p2.catch(function(){});});"
+                + "        }"
+                + "      }"
+                + "    }catch(e){}"
+                + "  }"
+                + "  return '';"
+                + "}"
 
                 // === CAPA 1: embed69 ===
                 + "if(isEmbed69){"
@@ -669,14 +1175,12 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "    if(window.jwplayer){"
                 + "      var jw=window.jwplayer();"
                 + "      if(jw){"
-                + "        try{if(jw.setMute)jw.setMute(false);}catch(e){}"
-                + "        try{if(jw.setVolume)jw.setVolume(100);}catch(e){}"
-                + "        try{if(jw.play)jw.play();}catch(e){}"
+                + "        try{if(jw.setMute)jw.setMute(true);}catch(e){}"
+                + "        try{if(jw.play)jw.play(true);}catch(e){}"
                 + "        var jw2=window.jwplayer('vplayer');"
                 + "        if(jw2){"
-                + "          try{if(jw2.setMute)jw2.setMute(false);}catch(e){}"
-                + "          try{if(jw2.setVolume)jw2.setVolume(100);}catch(e){}"
-                + "          try{if(jw2.play)jw2.play();}catch(e){}"
+                + "          try{if(jw2.setMute)jw2.setMute(true);}catch(e){}"
+                + "          try{if(jw2.play)jw2.play(true);}catch(e){}"
                 + "        }"
                 + "      }"
                 + "    }"
@@ -685,56 +1189,39 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "  for(var v=0;v<vids.length;v++){"
                 + "    try{"
                 + "      var vid=vids[v];"
-                + "      vid.muted=false;vid.volume=1;"
+                + "      vid.muted=true;vid.playsInline=true;"
                 + "      if(vid.paused){"
                 + "        var vp=vid.play();"
-                + "        if(vp&&vp.catch)vp.catch(function(){});"
+                + "        if(vp&&vp.then){vp.then(function(){setTimeout(function(){try{vid.muted=false;}catch(e){}},300);}).catch(function(){vid.muted=true;try{vid.play();}catch(e2){}})}"
                 + "      }"
                 + "    }catch(e){}"
                 + "  }"
                 + "  return '';"
                 + "}"
 
-                // === CAPA 2: vidhide/minochinos â€” JWPlayer ===
+                // === CAPA 2: vidhide/minochinos — JWPlayer ===
                 + "if(isVidHide){"
-                // Bloquear window.open y eliminar overlays de anuncios
-                + "  if(!window.__rexOpenBlocked){window.__rexOpenBlocked=true;window.open=function(){return null;};}"
-                + "  var adbd=document.getElementById('adbd');if(adbd)adbd.style.display='none';"
-                + "  if(typeof pickDirect!=='undefined'){window.pickDirect=function(){};}"
-                // Eliminar divs invisibles de anuncios
-                + "  var adDivs=document.querySelectorAll('div[style*=\"z-index\"][style*=\"fixed\"]');"
-                + "  for(var ad=0;ad<adDivs.length;ad++){"
-                + "    var adS=adDivs[ad].style;"
-                + "    if(parseInt(adS.zIndex)>2000000000||adS.opacity==='0.01'){"
-                + "      adDivs[ad].parentNode.removeChild(adDivs[ad]);"
-                + "    }"
-                + "  }"
-                // Eliminar scripts de anuncios (static.js)
-                + "  var adScripts=document.querySelectorAll('script[src*=\"static.js\"]');"
-                + "  for(var as=0;as<adScripts.length;as++){adScripts[as].parentNode.removeChild(adScripts[as]);}"
-                // JWPlayer: reproducir CON sonido directamente
+                // JWPlayer: reproducir muteado primero (Chromium permite autoplay muted)
                 + "  try{"
                 + "    if(window.jwplayer){"
-                + "      var jw=window.jwplayer();"
+                + "      var jw=window.jwplayer('vplayer')||window.jwplayer();"
                 + "      if(jw&&typeof jw.getState==='function'){"
                 + "        var state=jw.getState();"
                 + "        if(state==='idle'||state==='paused'){"
-                + "          jw.setMute(false);"
-                + "          jw.setVolume(100);"
-                + "          jw.play();"
-                + "        } else if(state==='playing'||state==='buffering'){"
-                + "          jw.setMute(false);"
-                + "          jw.setVolume(100);"
+                + "          try{if(jw.setMute)jw.setMute(true);}catch(e){}"
+                + "          try{if(jw.play)jw.play(true);}catch(e){}"
                 + "        }"
                 + "      }"
                 + "    }"
                 + "  }catch(e){}"
-                // Videos nativos: reproducir CON sonido (no mutear)
+                + "  var jwBtn=document.querySelector('.jw-display-icon-container,.jw-display-icon-display');"
+                + "  if(jwBtn){try{jwBtn.click();}catch(e){}}"
+                // Videos nativos: reproducir muteado primero
                 + "  var vids=document.querySelectorAll('video');"
                 + "  for(var v=0;v<vids.length;v++){"
                 + "    try{"
                 + "      var vid=vids[v];"
-                + "      vid.muted=false;vid.volume=1;"
+                + "      vid.muted=true;vid.playsInline=true;"
                 + "      if(vid.paused){"
                 + "        var vp=vid.play();"
                 + "        if(vp&&vp.catch)vp.catch(function(){});"
@@ -744,26 +1231,67 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "  return '';"
                 + "}"
 
-                // === OTROS PLAYERS genÃ©ricos ===
+                // === OTROS PLAYERS genéricos (Cuevana y otros servidores) ===
                 + "function isPlaying(m){return!!m&&!m.paused&&!m.ended&&m.readyState>2;}"
-                + "var media=document.querySelectorAll('video,audio');"
-                + "for(var i=0;i<media.length;i++){if(isPlaying(media[i]))return '';}"
-                + "for(var j=0;j<media.length;j++){"
-                + "  var m=media[j];"
+                + "var allMedia=[];"
+                + "try{"
+                + "  var v0=document.querySelectorAll('video,audio');"
+                + "  for(var i=0;i<v0.length;i++)allMedia.push({m:v0[i],doc:document});"
+                + "  var ifrs=document.querySelectorAll('iframe');"
+                + "  for(var j=0;j<ifrs.length;j++){"
+                + "    try{"
+                + "      var idoc=ifrs[j].contentDocument||(ifrs[j].contentWindow&&ifrs[j].contentWindow.document);"
+                + "      if(idoc){"
+                + "        var iv=idoc.querySelectorAll('video,audio');"
+                + "        for(var k=0;k<iv.length;k++)allMedia.push({m:iv[k],doc:idoc});"
+                + "      }"
+                + "    }catch(e){}"
+                + "  }"
+                + "}catch(e){}"
+                + "for(var i=0;i<allMedia.length;i++){if(isPlaying(allMedia[i].m))return '';}"
+                + "try{var yp=document.getElementById('yesplease');if(yp){yp.click();}var cr=document.querySelectorAll('#checkresume_div,.checkresume');for(var ci=0;ci<cr.length;ci++){try{cr[ci].remove();}catch(e){}}}catch(e){}"
+                + "var sel='.vjs-big-play-button,.play-wrapper,.play-icon,#os_player .play-icon,#player-overlay,.plyr__control--overlaid,.fluid_initial_play,button.play,[aria-label=\"Play\"],.jw-display-icon-container,.jw-icon-display,.playbtn,#playBtn,.play-btn,.jw-preview,.jw-media';"
+                + "function clickAllIn(doc){"
+                + "  if(!doc)return;"
                 + "  try{"
-                + "    m.muted=false;m.volume=1;m.autoplay=true;m.playsInline=true;"
-                + "    if(m.paused){"
-                + "      var pr=m.play();"
-                + "      if(pr&&pr.catch)pr.catch(function(){});"
+                + "    var btns=doc.querySelectorAll(sel);"
+                + "    for(var b=0;b<btns.length;b++){"
+                + "      try{btns[b].click();}catch(e){}"
+                + "      try{btns[b].dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));}catch(e2){}"
                 + "    }"
                 + "  }catch(e){}"
                 + "}"
-                + "try{if(window.jwplayer){var jw=window.jwplayer();if(jw){jw.setMute(false);jw.setVolume(100);if(jw.play)jw.play(true);}}}catch(e){}"
+                + "clickAllIn(document);"
+                + "try{"
+                + "  var ifrs=document.querySelectorAll('iframe');"
+                + "  for(var j=0;j<ifrs.length;j++){"
+                + "    try{"
+                + "      var idoc=ifrs[j].contentDocument||(ifrs[j].contentWindow&&ifrs[j].contentWindow.document);"
+                + "      clickAllIn(idoc);"
+                + "    }catch(e){}"
+                + "  }"
+                + "}catch(e){}"
+                + "for(var j=0;j<allMedia.length;j++){"
+                + "  var m=allMedia[j].m;"
+                + "  try{"
+                + "    m.muted=true;m.playsInline=true;"
+                + "    m.setAttribute('playsinline','');"
+                + "    m.setAttribute('webkit-playsinline','');"
+                + "    if(m.paused){"
+                + "      var pr=m.play();"
+                + "      if(pr&&pr.then){"
+                + "        pr.then(function(){setTimeout(function(){try{m.muted=false;}catch(e){}},400);}).catch(function(){m.muted=true;try{m.play();}catch(e2){}});"
+                + "      }"
+                + "    }"
+                + "  }catch(e){}"
+                + "}"
+                + "try{if(window.jwplayer){var jw=window.jwplayer('vplayer')||window.jwplayer();if(jw){try{if(jw.setMute)jw.setMute(true);}catch(e){}if(jw.play)jw.play(true);}}}catch(e){}"
+                + "try{if(window.videojs&&window.videojs.players){Object.keys(window.videojs.players).forEach(function(k){try{var p=window.videojs.players[k];p.muted(true);if(p.paused&&p.paused())p.play();}catch(e){}});}}catch(e){}"
                 + "return '';"
                 + "}catch(err){return '';}"
                 + "})();";
 
-        // El callback recibe la URL del embed (si embed69 la retornÃ³)
+        // El callback recibe la URL del embed (si embed69 la retornó)
         webView.evaluateJavascript(js, result -> {
             if (result == null) return;
             // evaluateJavascript envuelve strings en comillas, limpiar
@@ -813,6 +1341,9 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                     serverUrls.add(embedUrl);
                     currentServerIndex = 0;
                     pageLoaded = false;
+                    if (embedUrl.contains("canela.tv")) {
+                        preconfigureCookiesForCanela();
+                    }
                     Map<String, String> headers = buildPlaybackHeaders(embedUrl);
                     if (headers.isEmpty()) {
                         webView.loadUrl(embedUrl);
@@ -831,7 +1362,11 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void inspectPlaybackState() {
-        if (webView == null || isFinishing() || isDestroyed()) {
+        if (isExiting || webView == null || isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (isTuDoramaSource() && doramaFrame != null
+                && android.os.SystemClock.elapsedRealtime() - doramaFrameSeenAtMs < 3500L) {
             return;
         }
 
@@ -842,20 +1377,136 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
 
         String js = "(function(){"
-                + "try {"
-                + "var media=document.querySelectorAll('video,audio');"
-                + "if(!media||media.length===0){return {hasMedia:false};}"
-                + "var selected=null;"
-                + "for(var i=0;i<media.length;i++){"
-                + "var m=media[i];"
-                + "if(!selected){selected=m;}"
-                + "if(m&&!m.paused){selected=m;break;}"
+                + "try{"
+                + "  try{"
+                + "    var yp=document.getElementById('yesplease');if(yp){yp.click();}"
+                + "    var cr=document.querySelectorAll('#checkresume_div,.checkresume');for(var i=0;i<cr.length;i++){try{cr[i].remove();}catch(e){}}"
+                + "    var ob=document.getElementById('onetrust-accept-btn-handler')||document.getElementById('accept-recommended-btn-handler');"
+                + "    if(ob){try{ob.click();}catch(e){}}"
+                + "    var obtns=document.querySelectorAll('button,a,[role=\"button\"],div.ot-sdk-button');"
+                + "    for(var obi=0;obi<obtns.length;obi++){"
+                + "      var otx=(obtns[obi].textContent||obtns[obi].innerText||'').toLowerCase().trim();"
+                + "      if(otx==='aceptar todas'||otx.indexOf('aceptar todas')!==-1||otx==='solo necesarias'||otx.indexOf('solo necesarias')!==-1){"
+                + "        try{obtns[obi].click();obtns[obi].dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));}catch(e){}"
+                + "      }"
+                + "    }"
+                + "    var badNodes=document.querySelectorAll('#onetrust-consent-sdk,#onetrust-banner-sdk,.onetrust-pc-dark-filter,.ot-sdk-container');"
+                + "    for(var bni=0;bni<badNodes.length;bni++){try{badNodes[bni].remove();}catch(e){try{badNodes[bni].style.display='none';}catch(e2){}}}"
+                + "  }catch(e){}"
+                + "  var dur=0;var cur=0;var isPaused=true;var ended=false;var hasMedia=false;"
+                + "if(window.jwplayer){"
+                + "  try{"
+                + "    var jw=window.jwplayer('vplayer')||window.jwplayer();"
+                + "    if(jw&&typeof jw.getState==='function'){"
+                + "      var st=jw.getState();"
+                + "      if(st==='playing'||st==='buffering'||st==='paused'){"
+                + "        hasMedia=true;"
+                + "        isPaused=(st==='paused');"
+                + "        var jd=(typeof jw.getDuration==='function')?(jw.getDuration()||0):0;"
+                + "        var jc=(typeof jw.getPosition==='function')?(jw.getPosition()||0):0;"
+                + "        if(isFinite(jd)&&jd>0)dur=jd;"
+                + "        if(isFinite(jc)&&jc>=0)cur=jc;"
+                + "      }"
+                + "    }"
+                + "  }catch(e){}"
                 + "}"
-                + "if(!selected){return {hasMedia:false};}"
-                + "var duration=(isFinite(selected.duration)&&selected.duration>0)?selected.duration:0;"
-                + "var current=(isFinite(selected.currentTime)&&selected.currentTime>=0)?selected.currentTime:0;"
-                + "var remaining=duration>0?Math.max(0,duration-current):0;"
-                + "return {hasMedia:true,duration:duration,currentTime:current,remaining:remaining,ended:!!selected.ended,paused:!!selected.paused};"
+                + "var media=[];"
+                + "try{"
+                + "  var v0=document.querySelectorAll('video,audio');"
+                + "  for(var i=0;i<v0.length;i++)media.push(v0[i]);"
+                + "  var ifrs=document.querySelectorAll('iframe');"
+                + "  for(var j=0;j<ifrs.length;j++){"
+                + "    try{"
+                + "      var doc=ifrs[j].contentDocument||(ifrs[j].contentWindow&&ifrs[j].contentWindow.document);"
+                + "      if(doc){"
+                + "        var vf=doc.querySelectorAll('video,audio');"
+                + "        for(var k=0;k<vf.length;k++)media.push(vf[k]);"
+                + "      }"
+                + "    }catch(e){}"
+                + "  }"
+                + "}catch(e){}"
+                + "if(media&&media.length>0){"
+                + "  var selected=null;"
+                + "  for(var i=0;i<media.length;i++){"
+                + "    var m=media[i];"
+                + "    if(!selected)selected=m;"
+                + "    if(m&&!m.paused){selected=m;break;}"
+                + "  }"
+                + "  if(selected){"
+                + "    var md=(isFinite(selected.duration)&&selected.duration>0)?selected.duration:0;"
+                + "    var mc=(isFinite(selected.currentTime)&&selected.currentTime>=0)?selected.currentTime:0;"
+                + "    if(md>0)dur=md;"
+                + "    if(mc>0||dur>0)cur=mc;"
+                + "    if(!selected.paused)isPaused=false;"
+                + "    if(selected.ended)ended=true;"
+                + "    if(dur>0||cur>0||!selected.paused||(selected.readyState&&selected.readyState>=2)){"
+                + "      hasMedia=true;"
+                + "    }"
+                + "  }"
+                + "}"
+                + "if(!hasMedia)return {hasMedia:false};"
+                + "var remaining=(dur>0)?Math.max(0,dur-cur):999999;"
+                + "var hasSkip=false;var introEnd=-1;"
+                + "try{"
+                + "  var skipEl=document.querySelector('.skip-option.intro, [class*=\"skip-option\"][class*=\"intro\"], .player-skip-options .intro, [class*=\"skipintro\"], [class*=\"skip-intro\"]');"
+                + "  if(skipEl){hasSkip=true;}"
+                + "}catch(e){}"
+                + "if(!hasSkip){"
+                + "  try{"
+                + "    var ifrs=document.querySelectorAll('iframe');"
+                + "    for(var ifi=0;ifi<ifrs.length;ifi++){"
+                + "      try{"
+                + "        var idoc=ifrs[ifi].contentDocument||(ifrs[ifi].contentWindow&&ifrs[ifi].contentWindow.document);"
+                + "        if(idoc&&idoc.querySelector('.skip-option.intro, [class*=\"skip-option\"][class*=\"intro\"], .player-skip-options .intro, [class*=\"skipintro\"], [class*=\"skip-intro\"]')){"
+                + "          hasSkip=true;break;"
+                + "        }"
+                + "      }catch(e){}"
+                + "    }"
+                + "  }catch(e){}"
+                + "}"
+                + "try{"
+                + "  var ap=document.querySelector('app-player, app-player-control');"
+                + "  if(ap&&ap.__ngContext__){"
+                + "    var ctx=ap.__ngContext__;"
+                + "    var ctxArr=Array.isArray(ctx)?ctx:(ctx.lView||[]);"
+                + "    for(var ci=0;ci<ctxArr.length;ci++){"
+                + "      var item=ctxArr[ci];"
+                + "      if(item&&typeof item==='object'){"
+                + "        if(item.skipIntro&&typeof item.skipIntro==='object'){"
+                + "          if(item.skipIntro.show){hasSkip=true;}"
+                + "          if(isFinite(item.skipIntro.end)&&item.skipIntro.end>0){introEnd=item.skipIntro.end;}"
+                + "        }"
+                + "        if(item.markers&&Array.isArray(item.markers)){"
+                + "          for(var mi=0;mi<item.markers.length;mi++){"
+                + "            var m=item.markers[mi];"
+                + "            if(m&&(m.type==='skipintro'||m.t==='skipintro')){"
+                + "              var ms=(m.start!=null)?m.start:m.m_st;"
+                + "              var me=(m.end!=null)?m.end:m.m_ed;"
+                + "              if(cur>=ms&&cur<me){hasSkip=true;introEnd=me;}"
+                + "            }"
+                + "          }"
+                + "        }"
+                + "      }"
+                + "    }"
+                + "  }"
+                + "}catch(e){}"
+                + "try{"
+                + "  if(selected&&selected.textTracks){"
+                + "    for(var ti=0;ti<selected.textTracks.length;ti++){"
+                + "      var trk=selected.textTracks[ti];"
+                + "      if(trk&&trk.cues){"
+                + "        for(var ui=0;ui<trk.cues.length;ui++){"
+                + "          var c=trk.cues[ui];"
+                + "          var txt=((c.text||c.id||'')+'').toLowerCase();"
+                + "          if(txt.indexOf('intro')!==-1&&cur>=c.startTime&&cur<=c.endTime){"
+                + "            hasSkip=true;if(c.endTime>0)introEnd=c.endTime;"
+                + "          }"
+                + "        }"
+                + "      }"
+                + "    }"
+                + "  }"
+                + "}catch(e){}"
+                + "return {hasMedia:true,duration:dur,currentTime:cur,remaining:remaining,ended:ended,paused:isPaused,hasSkipIntro:hasSkip,introEnd:introEnd};"
                 + "} catch(err) {"
                 + "return {hasMedia:false};"
                 + "}"
@@ -869,6 +1520,32 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
     }
 
+    private void unmuteWebViewAudio() {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+            "(function(){try{"
+            + "if(window.jwplayer){var jw=window.jwplayer('vplayer')||window.jwplayer();if(jw){if(jw.setMute)jw.setMute(false);if(jw.setVolume)jw.setVolume(100);}}"
+            + "var vids=document.querySelectorAll('video');for(var i=0;i<vids.length;i++){try{vids[i].muted=false;vids[i].volume=1;}catch(e){}}"
+            + "}catch(e){}})();", null
+        );
+    }
+
+    private boolean isAllCalidadSource() {
+        String source = seriesSource == null ? "" : seriesSource.trim();
+        return seriesPostId > 0 && (source.isEmpty() || "allcalidad".equalsIgnoreCase(source));
+    }
+
+    private void disableWebSubtitlesForAllCalidad() {
+        if (!isAllCalidadSource() || webView == null) return;
+        webView.evaluateJavascript("(function(){try{"
+                + "var videos=document.querySelectorAll('video');"
+                + "for(var i=0;i<videos.length;i++){var tracks=videos[i].textTracks||[];"
+                + "for(var j=0;j<tracks.length;j++){tracks[j].mode='disabled';}}"
+                + "if(window.jwplayer){var jw=window.jwplayer('vplayer')||window.jwplayer();"
+                + "if(jw&&jw.setCurrentCaptions)jw.setCurrentCaptions(-1);}" 
+                + "}catch(e){}})();", null);
+    }
+
     private void handlePlaybackProbe(String raw) {
         if (raw == null || raw.trim().isEmpty() || "null".equals(raw)) {
             return;
@@ -878,6 +1555,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             JSONObject state = new JSONObject(raw);
             if (!state.optBoolean("hasMedia", false)) {
                 if (isSeriesEpisodePlayback()) hideNextEpisodeButton(false);
+                hideSkipIntroButton(false);
                 return;
             }
 
@@ -886,8 +1564,28 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             double remaining = state.optDouble("remaining", Double.MAX_VALUE);
             boolean ended = state.optBoolean("ended", false);
             boolean isPaused = state.optBoolean("paused", false);
+            boolean hasSkipIntro = state.optBoolean("hasSkipIntro", false);
+            double introEnd = state.optDouble("introEnd", -1d);
+            if (isTuDoramaSource() && state.optBoolean("restored", false)) {
+                positionRestored = true;
+            }
 
-            if (!positionRestored && resumePositionMs > 0 && duration > 0) {
+            lastCurrentTimeSec = currentTime;
+
+            if (duration > 0 || currentTime > 0 || !isPaused) {
+                isVideoPlaying = true;
+                cancelPlaybackWatchdog();
+                if (duration > 0) {
+                    lastVideoDurationMs = (long) (duration * 1000);
+                }
+                injectHideVideoControls();
+                unmuteWebViewAudio();
+                if (isTvDevice) {
+                    scheduleTvControlsHide();
+                }
+            }
+
+            if (!isTuDoramaSource() && !positionRestored && resumePositionMs > 0 && duration > 0) {
                 double targetSec = resumePositionMs / 1000.0;
                 if (targetSec < duration) {
                     String seekJs = "(function(){"
@@ -903,13 +1601,29 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             }
 
             updateOverlayState(currentTime, duration, isPaused);
-            savePlaybackProgress(currentTime, duration);
+            if (resumePositionMs <= 0 || positionRestored) {
+                savePlaybackProgress(currentTime, duration);
+            }
+
+            if (hasSkipIntro && !introSkipped) {
+                showSkipIntroButton(introEnd);
+            } else {
+                if (!hasSkipIntro) {
+                    introSkipped = false;
+                }
+                hideSkipIntroButton(false);
+            }
 
             if (!isSeriesEpisodePlayback()) {
+                if (ended && contentId != null && !contentId.isEmpty()) {
+                    ContinueWatchingStore.markCompleted(PlayerContenidoActivity.this, contentId);
+                }
                 return;
             }
 
-            if ((ended || remaining <= AUTO_NEXT_REMAINING_SEC) && !autoNextTriggeredForCurrent) {
+            boolean hasEndedNaturally = ended && duration > 10 && currentTime > 5;
+            boolean hasReachedEnd = duration > 30 && remaining <= AUTO_NEXT_REMAINING_SEC && currentTime > 20;
+            if ((hasEndedNaturally || hasReachedEnd) && !autoNextTriggeredForCurrent) {
                 autoNextTriggeredForCurrent = true;
                 if (contentId != null && !contentId.isEmpty()) {
                     ContinueWatchingStore.markCompleted(PlayerContenidoActivity.this, contentId);
@@ -918,11 +1632,13 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 return;
             }
 
-            double trigger = resolveNextButtonTrigger(duration);
-            if (remaining <= trigger && remaining > AUTO_NEXT_REMAINING_SEC) {
-                showNextEpisodeButton(remaining);
-            } else if (remaining > trigger + NEXT_EPISODE_HIDE_HYSTERESIS_SEC) {
-                hideNextEpisodeButton(false);
+            if (duration > 30) {
+                double trigger = resolveNextButtonTrigger(duration);
+                if (remaining <= trigger && remaining > AUTO_NEXT_REMAINING_SEC) {
+                    showNextEpisodeButton(remaining);
+                } else if (remaining > trigger + NEXT_EPISODE_HIDE_HYSTERESIS_SEC) {
+                    hideNextEpisodeButton(false);
+                }
             }
         } catch (JSONException ignored) {
         }
@@ -932,7 +1648,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (durationSec <= 0) {
             return NEXT_EPISODE_BUTTON_REMAINING_SEC;
         }
-        return Math.min(NEXT_EPISODE_BUTTON_REMAINING_SEC, Math.max(20d, durationSec - 5d));
+        if (durationSec <= NEXT_EPISODE_BUTTON_REMAINING_SEC + 30d) {
+            return Math.max(15d, durationSec * 0.15d);
+        }
+        return NEXT_EPISODE_BUTTON_REMAINING_SEC;
     }
 
     private void showNextEpisodeButton(double remainingSec) {
@@ -953,6 +1672,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             return;
         }
 
+        hideSkipIntroButton(true);
         nextButtonVisible = true;
         nextEpisodeButton.setVisibility(View.VISIBLE);
         nextEpisodeButton.setAlpha(0f);
@@ -1004,7 +1724,15 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 continue;
             }
             String normalized = candidate.trim();
-            if (normalized.toLowerCase(Locale.ROOT).contains("embed69.org")) {
+            String lc = normalized.toLowerCase(Locale.ROOT);
+            if (lc.contains("embed69.org")) {
+                continue;
+            }
+            // Descartar páginas de catálogo/sitio web (no son reproductores de video)
+            if (lc.contains("/ver-pelicula/") || lc.contains("/ver-serie/")
+                    || lc.contains("/pelicula/") || lc.contains("/serie/")
+                    || lc.contains("/episodio/")
+                    || (lc.contains("cuevana3") && !lc.contains("player.cuevana3"))) {
                 continue;
             }
             filtered.add(normalized);
@@ -1033,6 +1761,9 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void playNextEpisode(boolean automatic) {
+        if (isExiting || isFinishing() || isDestroyed()) {
+            return;
+        }
         if (nextEpisodeInfo == null) {
             if (!automatic) {
                 Toast.makeText(this, "Ya estas en el ultimo episodio disponible", Toast.LENGTH_SHORT).show();
@@ -1045,6 +1776,15 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
         isTransitioningToNextEpisode = true;
         hideNextEpisodeButton(true);
+        hideSkipIntroButton(true);
+        currentIntroEndSec = -1;
+        introSkipped = false;
+
+        // Al elegir explícitamente el siguiente dentro de la ventana de tres
+        // minutos, el episodio saliente queda finalizado de forma coherente.
+        if (!automatic && contentId != null && !contentId.isEmpty()) {
+            ContinueWatchingStore.markCompleted(this, contentId);
+        }
 
         final NextEpisodeInfo target = nextEpisodeInfo;
         String code = formatEpisodeCode(target.seasonNumber, target.episodeNumber);
@@ -1052,15 +1792,59 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                AllCalidadScraper.hit(target.episodeId, "episodes");
-                List<String> urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(target.episodeId));
+                List<String> urls = new ArrayList<>();
+                boolean isNovelas = (seriesSource != null && ("novelas".equalsIgnoreCase(seriesSource) || "canela".equalsIgnoreCase(seriesSource)))
+                        || (seriesDetailUrl != null && seriesDetailUrl.contains("canela.tv"));
+                if (isNovelas) {
+                    try {
+                        sv.edu.catolica.rex.network.smart.CanelaScraper canelaScraper =
+                                new sv.edu.catolica.rex.network.smart.CanelaScraper();
+                        sv.edu.catolica.rex.models.MediaItem item = new sv.edu.catolica.rex.models.MediaItem(
+                                seriesTitle, "", imageUrl != null ? imageUrl : "",
+                                seriesDetailUrl != null ? seriesDetailUrl : "", seriesPostId);
+                        item.setMediaType(seriesPostType != null ? seriesPostType : "tvshows");
+                        item.setFuente(seriesSource);
+                        sv.edu.catolica.rex.network.smart.SmartPlaybackResult canelaResult =
+                                canelaScraper.resolveEpisode(item, target.seasonNumber, target.episodeNumber, target.episodeId);
+                        if (canelaResult != null && canelaResult.hasPlayableUrls()) {
+                            urls = canelaResult.toPlayableUrls();
+                        }
+                    } catch (Exception ignored) {}
+                }
 
+                boolean isAllCalidad = !isNovelas && seriesPostId > 0
+                        && (seriesSource == null || seriesSource.isEmpty() || "allcalidad".equalsIgnoreCase(seriesSource));
+                if (isAllCalidad && target.episodeId > 0) {
+                    try {
+                        AllCalidadScraper.hit(target.episodeId, "episodes");
+                        urls = AllCalidadScraper.getPlayableUrls(AllCalidadScraper.getPlayer(target.episodeId));
+                    } catch (Exception ignored) {}
+                }
+
+                if (urls == null || urls.isEmpty()) {
+                    try {
+                        sv.edu.catolica.rex.network.smart.SmartScraperEngine engine =
+                                new sv.edu.catolica.rex.network.smart.SmartScraperEngine();
+                        sv.edu.catolica.rex.models.MediaItem item = new sv.edu.catolica.rex.models.MediaItem(seriesTitle, "", imageUrl != null ? imageUrl : "", seriesDetailUrl != null ? seriesDetailUrl : "", seriesPostId);
+                        item.setMediaType(seriesPostType != null ? seriesPostType : "tvshows");
+                        item.setFuente(seriesSource);
+                        urls = engine.resolveEpisodeUrls(
+                                PlayerContenidoActivity.this,
+                                item,
+                                target.seasonNumber,
+                                target.episodeNumber,
+                                target.episodeId
+                        );
+                    } catch (Exception ignored) {}
+                }
+
+                final List<String> resolvedUrls = urls;
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) {
                         return;
                     }
 
-                    if (urls == null || urls.isEmpty()) {
+                    if (resolvedUrls == null || resolvedUrls.isEmpty()) {
                         isTransitioningToNextEpisode = false;
                         hideNextEpisodeLoader();
                         progressBar.setVisibility(View.GONE);
@@ -1069,7 +1853,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                         return;
                     }
 
-                    applyEpisodeAndLoad(target, new ArrayList<>(urls));
+                    applyEpisodeAndLoad(target, new ArrayList<>(resolvedUrls));
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -1089,12 +1873,45 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             String title = seriesTitle + " - " + formatEpisodeCode(episode.seasonNumber, episode.episodeNumber);
             String nextContentId = (seriesPostId > 0 && episode.episodeId > 0)
                     ? seriesPostId + "_" + episode.episodeId : contentId;
-            String embedReferer = originOf(!urls.isEmpty() ? urls.get(0) : null);
-            PlayerExoActivity.start(this, directStreamUrls, title,
-                    nextContentId, seriesTitle, imageUrl,
-                    seriesPostId, seriesPostType,
-                    episode.episodeId, episode.seasonNumber, episode.episodeNumber,
-                    0L, null, embedReferer);
+            String embedReferer = isTuDoramaSource() ? "https://tudorama.com/"
+                    : originOf(urls != null && !urls.isEmpty() ? urls.get(0) : null);
+            Intent exoIntent = new Intent(this, PlayerExoActivity.class);
+            exoIntent.putStringArrayListExtra(EXTRA_URLS, directStreamUrls);
+            exoIntent.putStringArrayListExtra("exo_urls", directStreamUrls);
+            exoIntent.putExtra(EXTRA_TITLE, title);
+            exoIntent.putExtra("exo_title", title);
+            exoIntent.putExtra("content_id", nextContentId);
+            exoIntent.putExtra("exo_content_id", nextContentId);
+            exoIntent.putExtra("series_title", seriesTitle);
+            exoIntent.putExtra("exo_series_title", seriesTitle);
+            exoIntent.putExtra("image_url", imageUrl);
+            exoIntent.putExtra("exo_image_url", imageUrl);
+            exoIntent.putExtra("post_id", seriesPostId);
+            exoIntent.putExtra("exo_post_id", seriesPostId);
+            exoIntent.putExtra("media_type", seriesPostType);
+            exoIntent.putExtra("exo_media_type", seriesPostType);
+            exoIntent.putExtra("episode_id", episode.episodeId);
+            exoIntent.putExtra("exo_episode_id", episode.episodeId);
+            exoIntent.putExtra("season_number", episode.seasonNumber);
+            exoIntent.putExtra("exo_season_number", episode.seasonNumber);
+            exoIntent.putExtra("episode_number", episode.episodeNumber);
+            exoIntent.putExtra("exo_episode_number", episode.episodeNumber);
+            exoIntent.putExtra("resume_position_ms", 0L);
+            exoIntent.putExtra("exo_resume_position_ms", 0L);
+            exoIntent.putExtra("series_source", seriesSource);
+            exoIntent.putExtra("exo_series_source", seriesSource);
+            exoIntent.putExtra("series_detail_url", seriesDetailUrl);
+            exoIntent.putExtra("exo_series_detail_url", seriesDetailUrl);
+            if (isTuDoramaSource()) {
+                exoIntent.putStringArrayListExtra("exo_fallback_embed_urls", extractEmbedUrls(urls));
+            }
+            if (embedReferer != null) {
+                exoIntent.putExtra("referer", embedReferer);
+                exoIntent.putExtra("origin", embedReferer);
+                exoIntent.putExtra("exo_referer", embedReferer);
+                exoIntent.putExtra("exo_origin", embedReferer);
+            }
+            startActivity(exoIntent);
             finish();
             return;
         }
@@ -1114,6 +1931,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         currentServerIndex = 0;
         pageLoaded = false;
         autoNextTriggeredForCurrent = false;
+        nextEpisodeQueuedInStore = false;
 
         if (webView != null) {
             webView.clearHistory();
@@ -1147,12 +1965,46 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         return direct;
     }
 
+    private ArrayList<String> extractEmbedUrls(List<String> urls) {
+        ArrayList<String> embeds = new ArrayList<>();
+        if (urls != null) {
+            for (String url : urls) {
+                if (url != null && !url.trim().isEmpty() && !isDirectStreamUrl(url)) {
+                    embeds.add(url.trim());
+                }
+            }
+        }
+        return embeds;
+    }
+
     private boolean isDirectStreamUrl(String url) {
         if (url == null) {
             return false;
         }
         String lc = url.trim().toLowerCase(Locale.ROOT);
-        return lc.contains(".m3u8") || lc.contains(".mpd") || lc.contains(".mp4");
+        if (lc.contains(".m3u8") || lc.contains(".mpd") || lc.contains(".mp4")) {
+            return true;
+        }
+        try {
+            Uri uri = Uri.parse(lc);
+            return "pixeldrain.com".equals(uri.getHost())
+                    && uri.getPath() != null && uri.getPath().matches("/api/file/[a-z0-9]+/?");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean isPlaylistStreamUrl(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return false;
+        }
+        String lc = url.trim().toLowerCase(Locale.ROOT);
+        if (lc.contains("/ad/") || lc.contains("/ads/") || lc.contains("doubleclick")
+                || lc.contains("analytics") || lc.contains("turnstile")
+                || lc.contains("challenges.cloudflare")) {
+            return false;
+        }
+        return lc.contains(".m3u8") || lc.contains(".mpd");
     }
 
     private boolean isKnownEmbedVideoHost(String url) {
@@ -1167,11 +2019,102 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 || lc.contains("voe.network")
                 || lc.contains("vidhide")
                 || lc.contains("streamwish")
-                || lc.contains("filemoon");
+                || lc.contains("wishembed")
+                || lc.contains("strwish")
+                || lc.contains("awish")
+                || lc.contains("flaswish")
+                || lc.contains("filemoon")
+                || lc.contains("filelions")
+                || lc.contains("dood")
+                || lc.contains("ds2play")
+                || lc.contains("waaw")
+                || lc.contains("netu.tv")
+                || lc.contains("hqq.tv")
+                || lc.contains("fastplay")
+                || lc.contains("uqload")
+                || lc.contains("streamtape")
+                || lc.contains("pelistop")
+                || lc.contains("embed69")
+                || lc.contains("cuevana3")
+                || lc.contains("cuevana")
+                || lc.contains("allcalidad")
+                || lc.contains("pelispedia")
+                || lc.contains("delivery-node")
+                || lc.contains("vimeos.net")
+                || lc.contains("dramiyos-cdn.com");
+    }
+
+    private boolean handleUrlNavigation(String url) {
+        if (isExiting || isFinishing() || isDestroyed()) {
+            return true;
+        }
+        if (url == null || url.trim().isEmpty()) {
+            return false;
+        }
+        String lc = url.trim().toLowerCase(Locale.ROOT);
+
+        // Bloquear únicamente esquemas externos como intent:, market:, whatsapp: para no romper la app
+        if (!lc.startsWith("http://") && !lc.startsWith("https://") && !lc.startsWith("/") && !lc.startsWith("./")) {
+            return true;
+        }
+
+        // Si la web intenta navegar fuera del reproductor (a home, detalle, catálogo, series, etc.),
+        // consideramos que el usuario quiere salir del reproductor y cerramos limpiamente la pantalla.
+        if (isExitNavigation(lc)) {
+            Log.d(TAG, "Navegación de salida detectada en WebView: " + url + ". Cerrando reproductor.");
+            finishWithResult();
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean isExitNavigation(String lcUrl) {
+        if (lcUrl == null) return false;
+        if (currentServerIndex >= 0 && currentServerIndex < serverUrls.size()) {
+            String current = serverUrls.get(currentServerIndex);
+            if (current != null && !current.isEmpty()) {
+                String lcCurrent = current.toLowerCase(Locale.ROOT);
+                if (lcUrl.equalsIgnoreCase(lcCurrent) || lcUrl.startsWith(lcCurrent)) {
+                    return false;
+                }
+            }
+        }
+        // Canela TV
+        if (lcUrl.contains("canela.tv")) {
+            if (lcUrl.contains("/player/") || lcUrl.contains("/tvepisode/") || lcUrl.contains("/movie/") || lcUrl.contains("/series/")) {
+                return false;
+            }
+            if (lcUrl.equals("https://canela.tv/") || lcUrl.equals("https://www.canela.tv/")
+                    || lcUrl.equals("https://canela.tv/es") || lcUrl.equals("https://www.canela.tv/es")
+                    || lcUrl.equals("https://canela.tv/es/") || lcUrl.equals("https://www.canela.tv/es/")
+                    || lcUrl.contains("/home") || lcUrl.contains("/catalogo") || lcUrl.contains("/search")) {
+                return true;
+            }
+        }
+        // Cuevana / AllCalidad / Pelispedia
+        if (lcUrl.contains("cuevana") || lcUrl.contains("allcalidad") || lcUrl.contains("pelispedia")) {
+            if (lcUrl.endsWith(".to/") || lcUrl.endsWith(".to") || lcUrl.endsWith(".re/") || lcUrl.endsWith(".re")
+                    || lcUrl.contains("/inicio") || lcUrl.contains("/categoria") || lcUrl.contains("/genero")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String hostOf(String url) {
+        if (url == null || url.trim().isEmpty()) return "";
+        try {
+            android.net.Uri uri = android.net.Uri.parse(url);
+            String host = uri.getHost();
+            return host != null ? host.toLowerCase(Locale.ROOT) : "";
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private void switchToExoPlayer(String streamUrl) {
-        if (disableExoSwitch || exoSwitchInProgress || streamUrl == null || streamUrl.trim().isEmpty()) {
+        if (isExiting || disableExoSwitch || exoSwitchInProgress || streamUrl == null || streamUrl.trim().isEmpty()) {
             return;
         }
         if (isFinishing() || isDestroyed()) {
@@ -1191,7 +2134,8 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 contentId, seriesTitle, imageUrl,
                 seriesPostId, seriesPostType,
                 currentEpisodeId, currentSeasonNumber, currentEpisodeNumber,
-                resumePositionMs, embedUrl, embedReferer);
+                resumePositionMs, embedUrl, embedReferer,
+                seriesSource, seriesDetailUrl);
         resumed = false;
         setPlaybackResult();
         finish();
@@ -1228,23 +2172,106 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         return String.format(Locale.getDefault(), "T%d:E%d", safeSeason, safeEpisode);
     }
 
+    private int parseEpisodeNumber() {
+        if (currentEpisodeNumber > 0) return currentEpisodeNumber;
+        String[] candidates = { getTitle() != null ? getTitle().toString() : "", seriesDetailUrl };
+        for (String s : candidates) {
+            if (s == null || s.isEmpty()) continue;
+            Matcher m = Pattern.compile("(\\d+)x(\\d+)", Pattern.CASE_INSENSITIVE).matcher(s);
+            if (m.find()) {
+                try { return Integer.parseInt(m.group(2)); } catch (Exception ignored) {}
+            }
+            Matcher m2 = Pattern.compile("(?i)(?:e|ep|episodio|capitulo\\s*)(\\d+)", Pattern.CASE_INSENSITIVE).matcher(s);
+            if (m2.find()) {
+                try { return Integer.parseInt(m2.group(1)); } catch (Exception ignored) {}
+            }
+        }
+        return 1;
+    }
+
+    private int parseSeasonNumber() {
+        if (currentSeasonNumber > 0) return currentSeasonNumber;
+        String[] candidates = { getTitle() != null ? getTitle().toString() : "", seriesDetailUrl };
+        for (String s : candidates) {
+            if (s == null || s.isEmpty()) continue;
+            Matcher m = Pattern.compile("(\\d+)x(\\d+)", Pattern.CASE_INSENSITIVE).matcher(s);
+            if (m.find()) {
+                try { return Integer.parseInt(m.group(1)); } catch (Exception ignored) {}
+            }
+            Matcher m2 = Pattern.compile("(?i)(?:t|s|temporada\\s*)(\\d+)", Pattern.CASE_INSENSITIVE).matcher(s);
+            if (m2.find()) {
+                try { return Integer.parseInt(m2.group(1)); } catch (Exception ignored) {}
+            }
+        }
+        return 1;
+    }
+
     private void preloadSeasonData() {
         if (!isSeriesEpisodePlayback() || loadingSeasonData || seasonPreloadAttempted) {
             return;
         }
         seasonPreloadAttempted = true;
         loadingSeasonData = true;
+
+        // 1) Intentar recuperar de memoria instantáneamente (0 ms)
+        List<AllCalidadScraper.Season> memorySeasons = sv.edu.catolica.rex.network.smart.SeriesSeasonsCache.get(
+                seriesTitle, seriesPostId, seriesDetailUrl);
+        if (memorySeasons != null && !memorySeasons.isEmpty()) {
+            loadingSeasonData = false;
+            seasonCache.clear();
+            seasonCache.addAll(memorySeasons);
+            refreshNextEpisodeFromCache();
+            return;
+        }
+
+        // 2) Si no estaba en memoria, consultar en background según la fuente
         new Thread(() -> {
             try {
-                String postType = (seriesPostType == null || seriesPostType.trim().isEmpty()) ? "tvshows" : seriesPostType;
-                AllCalidadScraper.hit(seriesPostId, postType);
-                List<AllCalidadScraper.Season> fetchedSeasons = AllCalidadScraper.getSeasons(seriesPostId);
+                List<AllCalidadScraper.Season> fetchedSeasons = null;
+                String source = seriesSource != null ? seriesSource.trim().toLowerCase(Locale.ROOT) : "";
+                boolean isNovelas = source.contains("novelas") || source.contains("canela")
+                        || (seriesDetailUrl != null && seriesDetailUrl.contains("canela.tv"));
 
+                if (isNovelas) {
+                    try {
+                        String query = (seriesDetailUrl != null && !seriesDetailUrl.isEmpty()) ? seriesDetailUrl : seriesTitle;
+                        fetchedSeasons = new sv.edu.catolica.rex.network.smart.CanelaScraper().getSeasons(query);
+                    } catch (Exception ignored) {}
+                }
+
+                boolean isCuevana = !isNovelas && (source.contains("cuevana")
+                        || (seriesDetailUrl != null && seriesDetailUrl.contains("cuevana"))
+                        || (seriesPostId <= 0));
+
+                if (isCuevana) {
+                    try {
+                        String query = (seriesDetailUrl != null && !seriesDetailUrl.isEmpty()) ? seriesDetailUrl : seriesTitle;
+                        fetchedSeasons = new sv.edu.catolica.rex.network.smart.Cuevana3Scraper().getSeasons(query);
+                    } catch (Exception ignored) {}
+                }
+
+                if ((fetchedSeasons == null || fetchedSeasons.isEmpty()) && seriesPostId > 0) {
+                    try {
+                        String postType = (seriesPostType == null || seriesPostType.trim().isEmpty()) ? "tvshows" : seriesPostType;
+                        AllCalidadScraper.hit(seriesPostId, postType);
+                        fetchedSeasons = AllCalidadScraper.getSeasons(seriesPostId);
+                    } catch (Exception ignored) {}
+                }
+
+                if ((fetchedSeasons == null || fetchedSeasons.isEmpty()) && seriesTitle != null && !seriesTitle.trim().isEmpty()) {
+                    try {
+                        fetchedSeasons = new sv.edu.catolica.rex.network.smart.Cuevana3Scraper().getSeasons(seriesTitle);
+                    } catch (Exception ignored) {}
+                }
+
+                final List<AllCalidadScraper.Season> resultSeasons = fetchedSeasons;
                 runOnUiThread(() -> {
                     loadingSeasonData = false;
                     seasonCache.clear();
-                    if (fetchedSeasons != null) {
-                        seasonCache.addAll(fetchedSeasons);
+                    if (resultSeasons != null && !resultSeasons.isEmpty()) {
+                        seasonCache.addAll(resultSeasons);
+                        sv.edu.catolica.rex.network.smart.SeriesSeasonsCache.put(
+                                seriesTitle, seriesPostId, seriesDetailUrl, resultSeasons);
                     }
                     refreshNextEpisodeFromCache();
                 });
@@ -1262,6 +2289,9 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private NextEpisodeInfo findNextEpisodeFromCache() {
+        int effectiveSeason = parseSeasonNumber();
+        int effectiveEpisode = parseEpisodeNumber();
+
         if (seasonCache.isEmpty()) {
             return null;
         }
@@ -1273,17 +2303,19 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             }
             int seasonNumber = season.seasonNumber > 0 ? season.seasonNumber : 1;
             for (AllCalidadScraper.Episode episode : season.episodes) {
-                if (episode == null || episode.id <= 0) {
+                if (episode == null) {
                     continue;
                 }
                 int episodeNumber = episode.episodeNumber > 0 ? episode.episodeNumber : 1;
+                int epId = episode.id > 0 ? episode.id : Math.abs((seasonNumber + "x" + episodeNumber).hashCode() % 1000000) + 100000;
+                episode.id = epId;
 
                 if (foundCurrent) {
-                    return new NextEpisodeInfo(episode.id, seasonNumber, episodeNumber, episode.title);
+                    return new NextEpisodeInfo(epId, seasonNumber, episodeNumber, episode.title);
                 }
 
-                if (episode.id == currentEpisodeId ||
-                        (currentEpisodeId <= 0 && seasonNumber == currentSeasonNumber && episodeNumber == currentEpisodeNumber)) {
+                if ((seasonNumber == effectiveSeason && episodeNumber == effectiveEpisode)
+                        || (currentEpisodeId > 0 && epId == currentEpisodeId)) {
                     currentSeasonNumber = seasonNumber;
                     currentEpisodeNumber = episodeNumber;
                     foundCurrent = true;
@@ -1291,7 +2323,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             }
         }
 
-        if (currentSeasonNumber <= 0 || currentEpisodeNumber <= 0) {
+        if (foundCurrent) {
             return null;
         }
 
@@ -1301,15 +2333,18 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             }
             int seasonNumber = season.seasonNumber > 0 ? season.seasonNumber : 1;
             for (AllCalidadScraper.Episode episode : season.episodes) {
-                if (episode == null || episode.id <= 0) {
+                if (episode == null) {
                     continue;
                 }
                 int episodeNumber = episode.episodeNumber > 0 ? episode.episodeNumber : 1;
+                int epId = episode.id > 0 ? episode.id : Math.abs((seasonNumber + "x" + episodeNumber).hashCode() % 1000000) + 100000;
+                episode.id = epId;
+
                 boolean comesAfterCurrent =
-                        seasonNumber > currentSeasonNumber
-                                || (seasonNumber == currentSeasonNumber && episodeNumber > currentEpisodeNumber);
+                        seasonNumber > effectiveSeason
+                                || (seasonNumber == effectiveSeason && episodeNumber > effectiveEpisode);
                 if (comesAfterCurrent) {
-                    return new NextEpisodeInfo(episode.id, seasonNumber, episodeNumber, episode.title);
+                    return new NextEpisodeInfo(epId, seasonNumber, episodeNumber, episode.title);
                 }
             }
         }
@@ -1317,13 +2352,20 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         return null;
     }
     private void savePlaybackProgress(double currentTimeSec, double durationSec) {
+        savePlaybackProgress(currentTimeSec, durationSec, false);
+    }
+
+    private void savePlaybackProgress(double currentTimeSec, double durationSec, boolean syncToRemote) {
         if (contentId == null || contentId.isEmpty() || currentTimeSec < 0) return;
 
         contentDurationMs = (long) (durationSec * 1000);
         long positionMs = (long) (currentTimeSec * 1000);
 
-        if (Math.abs(currentTimeSec - lastSavedPositionSec) < 8.0) return;
+        if (!syncToRemote && Math.abs(currentTimeSec - lastSavedPositionSec) < 8.0) return;
         lastSavedPositionSec = currentTimeSec;
+        long now = android.os.SystemClock.elapsedRealtime();
+        boolean sendRemote = syncToRemote || now - lastRemoteSaveElapsedMs >= 30000L;
+        if (sendRemote) lastRemoteSaveElapsedMs = now;
 
         ContinueWatchingItem item = new ContinueWatchingItem();
         item.setContentId(contentId);
@@ -1331,34 +2373,52 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         item.setSeriesTitle(seriesTitle);
         item.setImageUrl(imageUrl);
         item.setPostId(seriesPostId > 0 ? seriesPostId : (currentEpisodeId > 0 ? currentEpisodeId : 0));
+        item.setDetailUrl(seriesDetailUrl);
+        item.setSource(seriesSource);
         if (isSeriesEpisodePlayback()) {
             item.setEpisodeId(currentEpisodeId);
             item.setSeasonNumber(currentSeasonNumber);
             item.setEpisodeNumber(currentEpisodeNumber);
+            item.setMediaType(seriesPostType != null && !seriesPostType.isEmpty() ? seriesPostType : "tvshows");
+        } else {
+            item.setMediaType("movies");
         }
-        item.setPositionMs(positionMs);
-        item.setDurationMs(contentDurationMs);
-        if (durationSec > 0) {
-            item.setProgressPercent(Math.min(99, (int) (currentTimeSec / durationSec * 100)));
-        }
-        item.setCompleted(false);
+        ContinueWatchingStore.applyPlaybackProgress(item, positionMs, contentDurationMs);
+        boolean isNowCompleted = item.isCompleted();
 
         final ContinueWatchingItem itemToSave = item;
+        final boolean shouldQueueNext = isNowCompleted && isSeriesEpisodePlayback()
+                && !nextEpisodeQueuedInStore
+                && ContinueWatchingStore.resolveNextEpisodeItem(itemToSave) != null;
+        if (shouldQueueNext) {
+            nextEpisodeQueuedInStore = true;
+        }
+
         saveExecutor.execute(() -> {
             try {
-                ContinueWatchingStore.save(PlayerContenidoActivity.this, itemToSave);
+                if (shouldQueueNext) {
+                    ContinueWatchingStore.save(PlayerContenidoActivity.this, itemToSave);
+                    ContinueWatchingStore.queueNextEpisodeIfAvailable(PlayerContenidoActivity.this, itemToSave);
+                } else if (!nextEpisodeQueuedInStore) {
+                    if (sendRemote) {
+                        ContinueWatchingStore.save(PlayerContenidoActivity.this, itemToSave);
+                    } else {
+                        ContinueWatchingStore.saveLocal(PlayerContenidoActivity.this, itemToSave);
+                    }
+                }
             } catch (Exception ignored) {
             }
         });
     }
 
     private void schedulePositionRestore() {
-        if (resumePositionMs <= 0 || positionRestored) return;
+        if (isTuDoramaSource()) return;
+        if (isExiting || resumePositionMs <= 0 || positionRestored) return;
         final int[] retries = {0};
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (webView == null || isFinishing() || isDestroyed()) return;
+                if (isExiting || webView == null || isFinishing() || isDestroyed()) return;
                 double targetSec = resumePositionMs / 1000.0;
                 String js = "(function(){"
                         + "try{"
@@ -1390,6 +2450,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private String buildContentId() {
+        String passedContentId = getIntent().getStringExtra("exo_content_id");
+        if (passedContentId != null && !passedContentId.trim().isEmpty()) {
+            return passedContentId.trim();
+        }
         if (isSeriesEpisodePlayback() && currentEpisodeId > 0) {
             return seriesPostId + "_" + currentEpisodeId;
         }
@@ -1399,10 +2463,19 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (seriesPostId > 0) {
             return "post_" + seriesPostId;
         }
+        if (seriesDetailUrl != null && !seriesDetailUrl.trim().isEmpty()) {
+            return "url_" + Math.abs(seriesDetailUrl.trim().hashCode());
+        }
+        if (seriesTitle != null && !seriesTitle.trim().isEmpty()) {
+            return "title_" + Math.abs(seriesTitle.trim().toLowerCase(Locale.ROOT).hashCode());
+        }
         return "";
     }
 
     private void loadCurrentServer() {
+        if (isExiting || isFinishing() || isDestroyed()) {
+            return;
+        }
         if (currentServerIndex < 0 || currentServerIndex >= serverUrls.size()) {
             onAllServersFailed();
             return;
@@ -1410,7 +2483,11 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         failoverInProgress = false;
         pageLoaded = false;
         lastLoadedEmbedUrl = "";
+        cancelPlaybackWatchdog();
         String url = serverUrls.get(currentServerIndex);
+        if (url != null && url.contains("canela.tv")) {
+            preconfigureCookiesForCanela();
+        }
         if (currentServerIndex == 0 && currentServerRetry == 0) {
             showPlaybackStatus("Connecting...");
         } else if (currentServerRetry > 0) {
@@ -1433,6 +2510,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
 
         String lc = url.trim().toLowerCase(Locale.ROOT);
+        if (lc.contains("canela.tv")) {
+            headers.put("Referer", "https://canela.tv/");
+            headers.put("Origin", "https://canela.tv");
+        }
         if (lc.contains("vimeos.net") || lc.contains("s12.vimeos.net")) {
             headers.put("Referer", "https://lamovie.link/");
             headers.put("Origin", "https://lamovie.link");
@@ -1445,12 +2526,27 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             headers.put("Referer", "https://allcalidad.re/");
             headers.put("Origin", "https://allcalidad.re");
         }
+        if (lc.contains("cuevana")
+                || lc.contains("streamwish")
+                || lc.contains("wishembed")
+                || lc.contains("strwish")
+                || lc.contains("filemoon")
+                || lc.contains("filelions")
+                || lc.contains("bysejikuar")
+                || lc.contains("vidhide")
+                || lc.contains("vidhidepro")
+                || lc.contains("waaw")) {
+            headers.put("Referer", "https://wv3.cuevana3.eu/");
+            headers.put("Origin", "https://wv3.cuevana3.eu");
+        }
         return headers;
     }
 
     private void scheduleServerTimeout() {
         cancelServerTimeout();
+        if (isExiting || isFinishing() || isDestroyed()) return;
         timeoutRunnable = () -> {
+            if (isExiting || isFinishing() || isDestroyed()) return;
             if (!pageLoaded) {
                 handleServerFailure();
             }
@@ -1465,8 +2561,51 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
     }
 
+    private void schedulePlaybackWatchdog() {
+        cancelPlaybackWatchdog();
+        if (isExiting || isFinishing() || isDestroyed()) return;
+        if (serverUrls != null && serverUrls.size() > 1 && (currentServerIndex + 1 < serverUrls.size())) {
+            playbackWatchdogRunnable = () -> {
+                if (isExiting || isFinishing() || isDestroyed()) return;
+                if (!isVideoPlaying && lastVideoDurationMs <= 0) {
+                    if (webView != null) {
+                        webView.evaluateJavascript(
+                            "(function(){try{"
+                            + "if(window.jwplayer){var jw=window.jwplayer('vplayer')||window.jwplayer();if(jw&&typeof jw.getState==='function'){var s=jw.getState();if(s==='playing'||s==='buffering')return 'active';}}"
+                            + "var v=document.querySelector('video');if(v&&(v.readyState>=1||v.currentTime>0||!v.paused))return 'active';"
+                            + "var ifrs=document.querySelectorAll('iframe');for(var i=0;i<ifrs.length;i++){try{var doc=ifrs[i].contentDocument||ifrs[i].contentWindow.document;var iv=doc.querySelector('video');if(iv&&(iv.readyState>=1||iv.currentTime>0||!iv.paused))return 'active';}catch(e){}}"
+                            + "return 'idle';"
+                            + "}catch(e){return 'idle';}})();",
+                            res -> {
+                                if (isExiting || isFinishing() || isDestroyed()) return;
+                                if (res != null && res.contains("active")) {
+                                    Log.d(TAG, "Watchdog: player está activo/buffering, aplazando failover.");
+                                    handler.postDelayed(playbackWatchdogRunnable, isTvDevice ? 5000L : 10000L);
+                                    return;
+                                }
+                                Log.w(TAG, "Playback did not start within watchdog window. Failing over to next server.");
+                                handleServerFailure();
+                            }
+                        );
+                    } else {
+                        handleServerFailure();
+                    }
+                }
+            };
+            long delay = isTvDevice ? 7500L : PLAYBACK_WATCHDOG_MS;
+            handler.postDelayed(playbackWatchdogRunnable, delay);
+        }
+    }
+
+    private void cancelPlaybackWatchdog() {
+        if (playbackWatchdogRunnable != null) {
+            handler.removeCallbacks(playbackWatchdogRunnable);
+            playbackWatchdogRunnable = null;
+        }
+    }
+
     private void handleServerFailure() {
-        if (isFinishing() || isDestroyed()) {
+        if (isExiting || isFinishing() || isDestroyed()) {
             return;
         }
         if (failoverInProgress) {
@@ -1474,6 +2613,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
         failoverInProgress = true;
         cancelServerTimeout();
+        cancelPlaybackWatchdog();
 
         if (currentServerRetry < MAX_RETRIES_PER_SERVER) {
             currentServerRetry++;
@@ -1521,22 +2661,20 @@ public class PlayerContenidoActivity extends AppCompatActivity {
                 + "if(!style){"
                 + "  style=document.createElement('style');"
                 + "  style.id='__rex_jw_fullscreen_style';"
-                + "  style.textContent='html,body,#player,.jwplayer,.jw-wrapper,.jw-media,.jw-video,.jw-aspect{width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;} video{width:100% !important;height:100% !important;object-fit:contain !important;background:#000 !important;}';"
+                + "  style.textContent='html,body,#player,#vplayer,.jwplayer,.jw-wrapper,.jw-media,.jw-video,.jw-aspect{width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;} video{width:100% !important;height:100% !important;object-fit:contain !important;background:#000 !important;}';"
                 + "  document.head.appendChild(style);"
                 + "}"
                 + "if(window.jwplayer){"
-                + "  var jw=window.jwplayer();"
+                + "  var jw=window.jwplayer('vplayer')||window.jwplayer();"
                 + "  if(jw){"
-                + "    try{if(jw.setMute)jw.setMute(false);}catch(e){}"
-                + "    try{if(jw.setVolume)jw.setVolume(100);}catch(e){}"
-                + "    try{if(jw.play)jw.play();}catch(e){}"
-                + "    try{if(jw.setFullscreen)jw.setFullscreen(true);}catch(e){}"
-                + "    try{if(jw.on){jw.on('ready',function(){try{if(jw.setFullscreen)jw.setFullscreen(true);}catch(e){}});}}catch(e){}"
+                + "    try{if(jw.setMute)jw.setMute(true);}catch(e){}"
+                + "    try{if(jw.play)jw.play(true);}catch(e){}"
+                + "    try{if(jw.on){jw.on('ready',function(){try{if(jw.setMute)jw.setMute(true);if(jw.play)jw.play(true);}catch(e){}});}}catch(e){}"
                 + "  }"
                 + "}"
                 + "var videos=document.querySelectorAll('video');"
                 + "for(var i=0;i<videos.length;i++){"
-                + "  try{videos[i].muted=false;videos[i].volume=1;}catch(e){}"
+                + "  try{videos[i].muted=true;videos[i].playsInline=true;var p=videos[i].play();if(p&&p.catch)p.catch(function(){});}catch(e){}"
                 + "}"
                 + "}catch(e){}"
                 + "})();";
@@ -1548,15 +2686,51 @@ public class PlayerContenidoActivity extends AppCompatActivity {
             return false;
         }
         String lc = url.toLowerCase(Locale.ROOT);
-        return lc.contains("cdn.jwplayer.com") || lc.contains("jwplayer.com");
+        return lc.contains("cdn.jwplayer.com")
+                || lc.contains("jwplayer.com")
+                || lc.contains("minochinos.com")
+                || lc.contains("hglink.to")
+                || lc.contains("bysedikamoum.com")
+                || lc.contains("vidhide")
+                || lc.contains("vimeos.net")
+                || lc.contains("streamwish")
+                || lc.contains("wishembed")
+                || lc.contains("filemoon");
     }
 
     private void finishWithResult() {
+        if (isExiting) return;
+        isExiting = true;
+        resumed = false;
+
+        handler.removeCallbacksAndMessages(null);
+        cancelServerTimeout();
+        cancelPlaybackWatchdog();
+        cancelAutoHide();
+        hideSkipIntroButton(true);
+        hideNextEpisodeButton(true);
+
         if (lastSavedPositionSec >= 0) {
             savePlaybackProgress(lastSavedPositionSec,
-                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0, true);
         }
         setPlaybackResult();
+
+        if (webView != null) {
+            try {
+                webView.evaluateJavascript(
+                    "(function(){try{"
+                    + "var vids=document.querySelectorAll('video,audio');"
+                    + "for(var i=0;i<vids.length;i++){vids[i].pause();vids[i].src='';vids[i].load();}"
+                    + "if(window.jwplayer){try{window.jwplayer().stop();}catch(e){}}"
+                    + "}catch(e){}})();", null);
+                webView.stopLoading();
+                webView.loadUrl("about:blank");
+                webView.onPause();
+                webView.setVisibility(View.GONE);
+            } catch (Exception ignored) {}
+        }
+
         finish();
         overridePendingTransition(0, android.R.anim.fade_out);
     }
@@ -1571,6 +2745,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
+        if (isExiting) return;
         if (customView != null) {
             FrameLayout decorView = (FrameLayout) getWindow().getDecorView();
             decorView.removeView(customView);
@@ -1590,8 +2765,138 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     @Override
     public boolean dispatchKeyEvent(android.view.KeyEvent event) {
-        // En TV: cada pulsación de tecla reinicia el temporizador de ocultar controles
-        if (isTvDevice && pageLoaded) {
+        if (event == null || isExiting || isFinishing() || isDestroyed()) {
+            return super.dispatchKeyEvent(event);
+        }
+
+        if (event.getAction() == android.view.KeyEvent.ACTION_DOWN) {
+            int keyCode = event.getKeyCode();
+
+            if (keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                if (controlsVisible) {
+                    hideControls();
+                    return true;
+                }
+                return super.dispatchKeyEvent(event);
+            }
+
+            if (nextButtonVisible && nextEpisodeButton != null && nextEpisodeButton.getVisibility() == View.VISIBLE && nextEpisodeButton.hasFocus()) {
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER || keyCode == android.view.KeyEvent.KEYCODE_ENTER) {
+                    playNextEpisode(false);
+                    return true;
+                }
+            }
+
+            if (skipIntroVisible && skipIntroButton != null && skipIntroButton.getVisibility() == View.VISIBLE && skipIntroButton.hasFocus()) {
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER || keyCode == android.view.KeyEvent.KEYCODE_ENTER) {
+                    skipIntro();
+                    return true;
+                }
+            }
+
+            switch (keyCode) {
+                case android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                case android.view.KeyEvent.KEYCODE_HEADSETHOOK:
+                    toggleWebViewPlayback();
+                    if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                    return true;
+
+                case android.view.KeyEvent.KEYCODE_MEDIA_PLAY:
+                    if (!isVideoPlaying) {
+                        requestAutoPlay();
+                    }
+                    toggleWebViewPlayback();
+                    if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                    return true;
+
+                case android.view.KeyEvent.KEYCODE_MEDIA_PAUSE:
+                    toggleWebViewPlayback();
+                    if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                    return true;
+
+                case android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                    webViewSkip(10000);
+                    if (doubleTapHelper != null) doubleTapHelper.showRightFeedback(10);
+                    if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                    return true;
+
+                case android.view.KeyEvent.KEYCODE_MEDIA_REWIND:
+                    webViewSkip(-10000);
+                    if (doubleTapHelper != null) doubleTapHelper.showLeftFeedback(10);
+                    if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                    return true;
+
+                case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
+                case android.view.KeyEvent.KEYCODE_ENTER:
+                case android.view.KeyEvent.KEYCODE_NUMPAD_ENTER:
+                    if (!controlsVisible) {
+                        if (!isVideoPlaying) {
+                            requestAutoPlay();
+                            toggleWebViewPlayback();
+                        } else {
+                            showControls();
+                        }
+                    } else {
+                        View focused = getCurrentFocus();
+                        if (focused != null && focused != controlOverlay && (focused.isClickable() || focused instanceof android.widget.Button || focused instanceof android.widget.ImageButton)) {
+                            focused.performClick();
+                        } else {
+                            toggleWebViewPlayback();
+                        }
+                    }
+                    if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                    return true;
+
+                case android.view.KeyEvent.KEYCODE_DPAD_LEFT:
+                    if (!controlsVisible) {
+                        webViewSkip(-10000);
+                        if (doubleTapHelper != null) doubleTapHelper.showLeftFeedback(10);
+                        if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                        return true;
+                    } else {
+                        View focused = getCurrentFocus();
+                        if (focused instanceof SeekBar) {
+                            webViewSkip(-10000);
+                            if (doubleTapHelper != null) doubleTapHelper.showLeftFeedback(10);
+                            if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                            return true;
+                        }
+                        resetAutoHide();
+                        break;
+                    }
+
+                case android.view.KeyEvent.KEYCODE_DPAD_RIGHT:
+                    if (!controlsVisible) {
+                        webViewSkip(10000);
+                        if (doubleTapHelper != null) doubleTapHelper.showRightFeedback(10);
+                        if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                        return true;
+                    } else {
+                        View focused = getCurrentFocus();
+                        if (focused instanceof SeekBar) {
+                            webViewSkip(10000);
+                            if (doubleTapHelper != null) doubleTapHelper.showRightFeedback(10);
+                            if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                            return true;
+                        }
+                        resetAutoHide();
+                        break;
+                    }
+
+                case android.view.KeyEvent.KEYCODE_DPAD_UP:
+                case android.view.KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (!controlsVisible) {
+                        showControls();
+                        if (isTvDevice && isVideoPlaying) scheduleTvControlsHide();
+                        return true;
+                    } else {
+                        resetAutoHide();
+                        break;
+                    }
+            }
+        }
+
+        if (isTvDevice && pageLoaded && !isExiting && isVideoPlaying) {
             scheduleTvControlsHide();
         }
         return super.dispatchKeyEvent(event);
@@ -1599,21 +2904,33 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        isExiting = true;
+        if (doubleTapHelper != null) {
+            doubleTapHelper.onDestroy();
+        }
         handler.removeCallbacksAndMessages(null);
         cancelServerTimeout();
+        cancelPlaybackWatchdog();
         cancelAutoHide();
+        hideSkipIntroButton(true);
+        hideNextEpisodeButton(true);
         if (lastSavedPositionSec >= 0) {
             savePlaybackProgress(lastSavedPositionSec,
-                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0, true);
         }
         setPlaybackResult();
         if (webView != null) {
-            android.view.ViewParent parent = webView.getParent();
-            if (parent instanceof android.view.ViewGroup) {
-                ((android.view.ViewGroup) parent).removeView(webView);
-            }
-            webView.removeAllViews();
-            webView.destroy();
+            try {
+                webView.stopLoading();
+                webView.loadUrl("about:blank");
+                webView.clearHistory();
+                android.view.ViewParent parent = webView.getParent();
+                if (parent instanceof android.view.ViewGroup) {
+                    ((android.view.ViewGroup) parent).removeView(webView);
+                }
+                webView.removeAllViews();
+                webView.destroy();
+            } catch (Exception ignored) {}
             webView = null;
         }
         saveExecutor.shutdown();
@@ -1624,14 +2941,22 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        cancelPlaybackWatchdog();
         handler.removeCallbacks(playbackMonitorRunnable);
         handler.removeCallbacks(tvHideControlsRunnable);
         cancelAutoHide();
         if (lastSavedPositionSec >= 0) {
             savePlaybackProgress(lastSavedPositionSec,
-                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0);
+                    contentDurationMs > 0 ? contentDurationMs / 1000.0 : 0, true);
         }
         if (webView != null) {
+            sendDoramaFrameCommand("pause", 0);
+            webView.evaluateJavascript(
+                    "(function(){try{"
+                    + "if(window.jwplayer){try{var jw=window.jwplayer('vplayer')||window.jwplayer();if(jw&&jw.pause)jw.pause(true);}catch(e){}}"
+                    + "var media=document.querySelectorAll('video,audio');"
+                    + "for(var i=0;i<media.length;i++){try{media[i].pause();}catch(e){}}"
+                    + "}catch(e){}})();", null);
             webView.onPause();
         }
     }
@@ -1651,7 +2976,7 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         tvDuration = findViewById(R.id.tv_duration);
         tvTitle = findViewById(R.id.tv_player_title);
 
-        tvTitle.setText(getTitle() != null ? getTitle() : "Reproduciendo");
+        tvTitle.setText(resolveDisplayTitle());
 
         findViewById(R.id.btn_quality).setVisibility(View.GONE);
         findViewById(R.id.btn_subtitles).setVisibility(View.GONE);
@@ -1666,8 +2991,24 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
         btnBack.setOnClickListener(v -> finishWithResult());
         btnPlayCenter.setOnClickListener(v -> toggleWebViewPlayback());
-        btnSkipBack.setOnClickListener(v -> webViewSkip(-10000));
-        btnSkipForward.setOnClickListener(v -> webViewSkip(10000));
+        btnSkipBack.setOnClickListener(v -> {
+            webViewSkip(-10000);
+            if (doubleTapHelper != null) doubleTapHelper.showLeftFeedback(10);
+        });
+        btnSkipForward.setOnClickListener(v -> {
+            webViewSkip(10000);
+            if (doubleTapHelper != null) doubleTapHelper.showRightFeedback(10);
+        });
+
+        doubleTapHelper = new PlayerDoubleTapHelper(this);
+        doubleTapHelper.initViews(
+                btnSkipBack,
+                btnSkipForward,
+                deltaMs -> webViewSkip(deltaMs),
+                () -> toggleControls(),
+                () -> controlsVisible,
+                () -> resetAutoHide()
+        );
 
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             private boolean fromUser = false;
@@ -1723,10 +3064,62 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         });
     }
 
+    private String resolveDisplayTitle() {
+        if (seriesTitle != null && !seriesTitle.trim().isEmpty() && !"Reproduciendo".equalsIgnoreCase(seriesTitle.trim()) && !"REX".equalsIgnoreCase(seriesTitle.trim())) {
+            if (currentSeasonNumber > 0 && currentEpisodeNumber > 0) {
+                return String.format(Locale.US, "%s T%d:E%d", seriesTitle.trim(), currentSeasonNumber, currentEpisodeNumber);
+            }
+            return seriesTitle.trim();
+        }
+        String t = getIntent().getStringExtra(EXTRA_TITLE);
+        if (t == null || t.trim().isEmpty()) {
+            t = getIntent().getStringExtra("title");
+        }
+        if (t != null && !t.trim().isEmpty() && !"REX".equalsIgnoreCase(t.trim()) && !"Reproduciendo".equalsIgnoreCase(t.trim())) {
+            return t.trim();
+        }
+        return "";
+    }
+
     private void toggleWebViewPlayback() {
         if (webView == null) return;
+        if (sendDoramaFrameCommand("toggle", 0)) {
+            resetAutoHide();
+            return;
+        }
         webView.evaluateJavascript(
-            "(function(){try{var v=document.querySelector('video');if(v){if(v.paused){v.play()}else{v.pause()}}return!!(v&&!v.paused)}catch(e){return false}})();",
+            "(function(){try{"
+            + "if(window.jwplayer){"
+            + "  var jw=window.jwplayer('vplayer')||window.jwplayer();"
+            + "  if(jw&&typeof jw.getState==='function'){"
+            + "    var st=jw.getState();"
+            + "    if(st==='playing'){"
+            + "      if(jw.pause)jw.pause(true);"
+            + "      return false;"
+            + "    }else{"
+            + "      if(jw.setMute)jw.setMute(false);"
+            + "      if(jw.setVolume)jw.setVolume(100);"
+            + "      if(jw.play)jw.play(true);"
+            + "      return true;"
+            + "    }"
+            + "  }"
+            + "}"
+            + "var v=document.querySelector('video');"
+            + "if(v){"
+            + "  if(v.paused){"
+            + "    v.muted=false;v.volume=1;"
+            + "    var p=v.play();"
+            + "    if(p&&p.catch)p.catch(function(){});"
+            + "    return true;"
+            + "  }else{"
+            + "    v.pause();"
+            + "    return false;"
+            + "  }"
+            + "}"
+            + "var playBtns=document.querySelectorAll('.vjs-big-play-button,.play-wrapper,.play-icon,#os_player .play-icon,#player-overlay,.plyr__control--overlaid,.fluid_initial_play,button.play,[aria-label=\"Play\"],.jw-display-icon-container');"
+            + "for(var b=0;b<playBtns.length;b++){try{playBtns[b].click();}catch(e){}}"
+            + "return false;"
+            + "}catch(e){return false;}})();",
             result -> {
                 boolean playing = "true".equals(result);
                 updatePlayPauseIcons(playing);
@@ -1735,9 +3128,34 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     }
 
     private void webViewSkip(long deltaMs) {
-        if (webView == null || lastVideoDurationMs <= 0) return;
+        if (webView == null) return;
+        double deltaSec = deltaMs / 1000.0;
+        if (sendDoramaFrameCommand("skip", deltaSec)) {
+            resetAutoHide();
+            return;
+        }
         webView.evaluateJavascript(
-            "(function(){try{var v=document.querySelector('video');if(v){var t=Math.max(0,Math.min(v.duration||0,v.currentTime+" + deltaMs / 1000.0 + "));v.currentTime=t;return true}return false}catch(e){return false}})();",
+            "(function(){try{"
+            + "if(window.jwplayer){"
+            + "  var jw=window.jwplayer('vplayer')||window.jwplayer();"
+            + "  if(jw&&typeof jw.getPosition==='function'){"
+            + "    var pos=jw.getPosition()+" + deltaSec + ";"
+            + "    var dur=(typeof jw.getDuration==='function')?jw.getDuration():0;"
+            + "    if(dur>0)pos=Math.min(dur,Math.max(0,pos));"
+            + "    if(jw.seek)jw.seek(pos);"
+            + "  }"
+            + "}"
+            + "var v=document.querySelector('video');"
+            + "if(v){"
+            + "  var cur=v.currentTime||0;"
+            + "  var target=cur+" + deltaSec + ";"
+            + "  if(target<0)target=0;"
+            + "  if(v.duration&&isFinite(v.duration)&&v.duration>0&&target>v.duration){target=v.duration;}"
+            + "  v.currentTime=target;"
+            + "  return true;"
+            + "}"
+            + "return false;"
+            + "}catch(e){return false;}})();",
             null);
         resetAutoHide();
     }
@@ -1745,8 +3163,23 @@ public class PlayerContenidoActivity extends AppCompatActivity {
     private void webViewSeekTo(long positionMs) {
         if (webView == null) return;
         double targetSec = positionMs / 1000.0;
+        if (sendDoramaFrameCommand("seek", targetSec)) {
+            resetAutoHide();
+            return;
+        }
         webView.evaluateJavascript(
-            "(function(){try{var v=document.querySelector('video');if(v&&isFinite(v.duration)&&v.duration>0){v.currentTime=" + targetSec + ";return true}return false}catch(e){return false}})();",
+            "(function(){try{"
+            + "if(window.jwplayer){"
+            + "  var jw=window.jwplayer('vplayer')||window.jwplayer();"
+            + "  if(jw&&typeof jw.seek==='function')jw.seek(" + targetSec + ");"
+            + "}"
+            + "var v=document.querySelector('video');"
+            + "if(v&&isFinite(v.duration)&&v.duration>0){"
+            + "  v.currentTime=" + targetSec + ";"
+            + "  return true;"
+            + "}"
+            + "return false;"
+            + "}catch(e){return false;}})();",
             null);
     }
 
@@ -1825,6 +3258,14 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         if (pageLoaded && !isTransitioningToNextEpisode) {
             handler.postDelayed(this::inspectPlaybackState, 60L);
         }
+
+        if (isTvDevice && btnPlayCenter != null) {
+            btnPlayCenter.post(() -> {
+                if (controlsVisible) {
+                    btnPlayCenter.requestFocus();
+                }
+            });
+        }
     }
 
     private void hideControls() {
@@ -1887,6 +3328,14 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         }
     }
 
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (doubleTapHelper != null && doubleTapHelper.dispatchTouchEvent(ev)) {
+            return true;
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
     private void enterImmersiveMode() {
         getWindow().setNavigationBarColor(android.graphics.Color.BLACK);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -1919,110 +3368,142 @@ public class PlayerContenidoActivity extends AppCompatActivity {
 
     private void injectHideVideoControls() {
         if (webView == null) return;
+        final boolean playing = isVideoPlaying;
         webView.evaluateJavascript(
             "(function(){"
             + "try{"
-            // ── Style: ocultar controles nativos HTML5 y JW Player ──
             + "var styleId='rex-hide-all-controls';"
-            + "if(!document.getElementById(styleId)){"
-            + "  var s=document.createElement('style');"
+            + "var s=document.getElementById(styleId);"
+            + "if(!s){"
+            + "  s=document.createElement('style');"
             + "  s.id=styleId;"
-            + "  s.textContent="
-            // Nativo HTML5
+            + "  (document.head||document.documentElement).appendChild(s);"
+            + "}else if(s.parentElement){"
+            + "  s.parentElement.appendChild(s);"
+            + "}"
+            + "s.textContent="
             + "  'video::-webkit-media-controls{display:none!important}'"
             + "  +'video::-webkit-media-controls-enclosure{display:none!important}'"
             + "  +'video::-webkit-media-controls-panel{display:none!important}'"
-            + "  +'video::-webkit-media-controls-overlay-play-button{display:none!important}'"
-            + "  +'video::-webkit-media-controls-start-playback-button{display:none!important}'"
-            // JW Player: barra inferior, display central, overlays
-            + "  +'.jw-controlbar{display:none!important}'"
-            + "  +'.jw-controls{display:none!important}'"
-            + "  +'.jw-controls-backdrop{display:none!important}'"
-            + "  +'.jw-display-controls{display:none!important}'"
-            + "  +'.jw-display-icon-container{display:none!important}'"
-            + "  +'.jw-title{display:none!important}'"
-            + "  +'.jw-logo{display:none!important}'"
-            + "  +'.jw-overlays{display:none!important}'"
-            + "  +'.jw-dock-buttons{display:none!important}'"
-            + "  +'.jw-nextup-container{display:none!important}'"
-            + "  +'.jw-info-container{display:none!important}'"
-            + "  +'.jw-featured{display:none!important}'"
-            + "  +'.jw-rightclick{display:none!important}'"
-            // Forzar video a llenar contenedor
-            + "  +'.jw-video,.jw-media,.jw-wrapper{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;background:#000!important}'"
-            + "  +'video{width:100%!important;height:100%!important;object-fit:contain!important;background:#000!important}';"
-            + "  document.head.appendChild(s);"
-            + "}"
-            // ── Remover atributo controls de todos los <video> ──
+            + "  +'.jw-controlbar,.jw-controls-backdrop,.jw-title,.jw-logo,.jw-dock-buttons{display:none!important}'"
+            + "  +'.jw-nextup-container,.jw-info-container,.jw-featured,.jw-rightclick{display:none!important}'"
+            + "  +'.vjs-control-bar{display:none!important}'"
+            + "  +'.media-control-layer,.fluid_controls_container,.art-bottom,.art-control,.fp-controls{display:none!important}'"
+            + "  +'app-player-control,app-player-seekbar,app-player-volume,app-player-meta-data,app-player-header,app-player-bottom,.player-controls,.player-bottom,.player-header,.player-top,button[aria-label*=\"back\" i],button[aria-label*=\"volver\" i],[class*=\"back-button\"],[class*=\"btn-back\"],[class*=\"back_button\"]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important}'"
+            + "  +'.player-skip-options{visibility:hidden!important;opacity:0!important;pointer-events:none!important}'"
+            + "  +'#checkresume_div,#checkresume_div_n,.checkresume,.checkresumearea,.checkresumetop,.checkresumebottom{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;z-index:-9999!important}'"
+            + "  +'.jw-modal,.jw-dialog,.jw-resume,.jw-resume-prompt,.jw-resume-dialog,.vjs-resume-modal,.vjs-resume-dialog,.vjs-modal-dialog,[class*=\"resume-dialog\"],[class*=\"resume-modal\"]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;z-index:-9999!important}'"
+            + "  +'#onetrust-consent-sdk,#onetrust-banner-sdk,.onetrust-pc-dark-filter,.ot-sdk-container,#onetrust-style,[id*=\"onetrust\"],[class*=\"onetrust\"],div[id*=\"consent\"],div[class*=\"consent\"],div[class*=\"cookie-banner\"]{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;z-index:-999999!important;width:0!important;height:0!important;max-height:0!important;overflow:hidden!important}'"
+            + (playing ? "  +'.jw-display-controls,.jw-display-icon-container,.jw-controls,.vjs-big-play-button,.plyr__control--overlaid{display:none!important}'" : "")
+            + "  +'.jw-video,.jw-media,.jw-wrapper,.vjs-tech{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important}'"
+            + "  +'video{width:100%!important;height:100%!important;object-fit:contain!important}';"
+            // Quitar atributo controls nativo de <video>
             + "document.querySelectorAll('video').forEach(function(v){"
             + "  v.removeAttribute('controls');"
             + "  v.setAttribute('playsinline','');"
             + "  v.setAttribute('webkit-playsinline','');"
             + "});"
-            // ── JW Player API: desactivar controles ──
-            + "try{if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}}catch(e){}"
-            + "try{if(window.jwplayer){var jw=window.jwplayer();if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}}}" +
-            "catch(e){}"
-            + "try{if(window.jwplayer){var jw2=window.jwplayer('vplayer');if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}}}" +
-            "catch(e){}"
-            // ── MutationObserver + polling SOLO para páginas con JW Player ──
-            // (en sitios con hls.js/vimeos no aplica y observar todo el DOM es caro)
-            + "var host=(location&&location.hostname?location.hostname.toLowerCase():'');"
-            + "var hasJw=typeof window.jwplayer!=='undefined'"
-            + "  ||typeof window.playerInstance!=='undefined'"
-            + "  ||host.indexOf('jwplayer')!==-1||host.indexOf('jwpsrv')!==-1;"
-            + "if(hasJw){"
-            + "  if(!window.__rexVideoObserver){"
-            + "    window.__rexVideoObserver=true;"
-            + "    new MutationObserver(function(m){"
-            + "      m.forEach(function(mut){"
-            + "        mut.addedNodes.forEach(function(n){"
-            + "          if(n.nodeName==='VIDEO'){"
-            + "            n.removeAttribute('controls');"
-            + "            n.setAttribute('playsinline','');"
-            + "          }"
-            + "          if(n.querySelectorAll){"
-            + "            n.querySelectorAll('video').forEach(function(v){"
-            + "              v.removeAttribute('controls');"
-            + "              v.setAttribute('playsinline','');"
-            + "            });"
-            + "          }"
-            + "        });"
-            + "      });"
-            + "    }).observe(document,{childList:true,subtree:true});"
-            + "  }"
-            + "  if(!window.__rexJwPolling){"
-            + "    window.__rexJwPolling=true;"
-            + "    var attempts=0;"
-            + "    var pollTimer=setInterval(function(){"
-            + "      attempts++;"
-            + "      try{"
-            + "        if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}"
-            + "        if(window.jwplayer){"
-            + "          var jw=window.jwplayer();"
-            + "          if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}"
-            + "          var jw2=window.jwplayer('vplayer');"
-            + "          if(jw2&&typeof jw2.setControls==='function'){jw2.setControls(false);}"
-            + "        }"
-            + "      }catch(e){}"
-            + "      if(attempts>10)clearInterval(pollTimer);"
-            + "    },1000);"
-            + "  }"
+            // Auto-descartar OneTrust / consentimiento de privacidad buscando por botones y textos
+            + "function dismissConsentNow(targetDoc){"
+            + "  var doc=targetDoc||document;"
+            + "  try{"
+            + "    var b=doc.getElementById('onetrust-accept-btn-handler')||doc.getElementById('accept-recommended-btn-handler');"
+            + "    if(b){try{b.click();}catch(e){}}"
+            + "    var btns=doc.querySelectorAll('button, a, [role=\"button\"], input[type=\"button\"], div.ot-sdk-button');"
+            + "    for(var bi=0;bi<btns.length;bi++){"
+            + "      var txt=(btns[bi].textContent||btns[bi].innerText||btns[bi].value||'').toLowerCase().trim();"
+            + "      if(txt==='aceptar todas'||txt==='aceptar todo'||txt==='aceptar todas las cookies'||txt.indexOf('aceptar todas')!==-1||txt.indexOf('aceptar todo')!==-1||txt==='solo necesarias'||txt==='sólo necesarias'||txt.indexOf('solo necesarias')!==-1||txt.indexOf('sólo necesarias')!==-1||txt==='accept all'||txt==='reject all'){"
+            + "        try{btns[bi].click();btns[bi].dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));}catch(e){}"
+            + "      }"
+            + "    }"
+            + "    var rb=doc.getElementById('onetrust-reject-all-handler')||doc.querySelector('.ot-pc-refuse-all-handler');"
+            + "    if(rb){try{rb.click();}catch(e){}}"
+            + "    var ots=doc.getElementById('onetrust-style');if(ots)try{ots.remove();}catch(e){}"
+            + "    var bads=doc.querySelectorAll('#onetrust-consent-sdk,#onetrust-banner-sdk,.onetrust-pc-dark-filter,.ot-sdk-container,[id*=\"onetrust\"],[class*=\"onetrust\"],div[id*=\"consent\"],div[class*=\"consent\"],div[class*=\"cookie-banner\"]');"
+            + "    for(var bj=0;bj<bads.length;bj++){"
+            + "      try{bads[bj].remove();}catch(e){try{bads[bj].style.display='none';}catch(e2){}}"
+            + "    }"
+            + "    if(window.localStorage)try{localStorage.setItem('OptanonAlertBoxClosed',new Date().toISOString());}catch(e){}"
+            + "  }catch(e){}"
             + "}"
+            + "dismissConsentNow();"
+            + "if(!window.__rexOtTimer){"
+            + "  window.__rexOtTimer=setInterval(function(){dismissConsentNow();},250);"
+            + "  setTimeout(function(){clearInterval(window.__rexOtTimer);window.__rexOtTimer=null;},10000);"
+            + "}"
+            // Auto-descartar o confirmar cualquier modal/diálogo de 'Resume playing?'
+            + "try{"
+            + "  var yp=document.getElementById('yesplease');"
+            + "  if(yp){yp.click();}"
+            + "  var cr=document.querySelectorAll('#checkresume_div,.checkresume,.jw-modal,.jw-dialog,.jw-resume-dialog,.vjs-modal-dialog,[class*=\"resume\"]');"
+            + "  for(var c=0;c<cr.length;c++){"
+            + "    try{"
+            + "      var btns=cr[c].querySelectorAll('button,a,.jw-button');"
+            + "      for(var b=0;b<btns.length;b++){"
+            + "        var txt=(btns[b].textContent||'').toLowerCase().trim();"
+            + "        if(txt.indexOf('yes')!==-1||txt.indexOf('resume')!==-1||txt.indexOf('sí')!==-1||txt.indexOf('si')!==-1){btns[b].click();break;}"
+            + "      }"
+            + "    }catch(e){}"
+            + "    try{cr[c].remove();}catch(e){cr[c].style.setProperty('display','none','important');}"
+            + "  }"
+            + "}catch(e){}"
+            // Ocultar controles en iframes hijos (AllCalidad / JWPlayer anidado)
+            + "try{"
+            + "  var ifrs=document.querySelectorAll('iframe');"
+            + "  for(var fi=0;fi<ifrs.length;fi++){"
+            + "    try{"
+            + "      var idoc=ifrs[fi].contentDocument||(ifrs[fi].contentWindow&&ifrs[fi].contentWindow.document);"
+            + "      if(idoc){"
+            + "        var istyle=idoc.getElementById(styleId);"
+            + "        if(!istyle&&idoc.head){"
+            + "          istyle=idoc.createElement('style');"
+            + "          istyle.id=styleId;"
+            + "          idoc.head.appendChild(istyle);"
+            + "        }"
+            + "        if(istyle)istyle.textContent=s.textContent;"
+            + "        dismissConsentNow(idoc);"
+            + "        idoc.querySelectorAll('video').forEach(function(v){"
+            + "          v.removeAttribute('controls');"
+            + "          v.setAttribute('playsinline','');"
+            + "          v.setAttribute('webkit-playsinline','');"
+            + "        });"
+            + "        if(ifrs[fi].contentWindow&&ifrs[fi].contentWindow.jwplayer){"
+            + "          try{"
+            + "            var ijw=ifrs[fi].contentWindow.jwplayer('vplayer')||ifrs[fi].contentWindow.jwplayer();"
+            + "            if(ijw&&typeof ijw.setControls==='function')ijw.setControls(false);"
+            + "          }catch(e){}"
+            + "        }"
+            + "      }"
+            + "    }catch(e){}"
+            + "  }"
+            + "}catch(e){}"
+            + "if(!window.__rexResumeObserver&&(document.body||document.documentElement)){"
+            + "  window.__rexResumeObserver=true;"
+            + "  new MutationObserver(function(){"
+            + "    dismissConsentNow();"
+            + "    try{"
+            + "      var y=document.getElementById('yesplease');if(y){y.click();}"
+            + "      var r=document.querySelectorAll('#checkresume_div,.checkresume');"
+            + "      for(var i=0;i<r.length;i++){try{r[i].remove();}catch(e){}}"
+            + "    }catch(e){}"
+            + "  }).observe(document.body||document.documentElement,{childList:true,subtree:true});"
+            + "}"
+            + (playing ? "try{if(window.playerInstance&&typeof window.playerInstance.setControls==='function'){window.playerInstance.setControls(false);}if(window.jwplayer){var jw=window.jwplayer('vplayer')||window.jwplayer();if(jw&&typeof jw.setControls==='function'){jw.setControls(false);}}}catch(e){}" : "")
             + "}catch(e){}"
             + "})();", null
         );
     }
 
     private boolean isTelevision() {
-        UiModeManager uiModeManager = (UiModeManager) getSystemService(UI_MODE_SERVICE);
-        return uiModeManager != null
-                && uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
+        return sv.edu.catolica.rex.utils.TvUtils.isTv(this);
     }
 
     // ── TV: auto-ocultar controles del reproductor por inactividad ──────────────
 
     private void scheduleTvControlsHide() {
+        if (!isVideoPlaying) {
+            return;
+        }
         handler.removeCallbacks(tvHideControlsRunnable);
         handler.postDelayed(tvHideControlsRunnable, TV_CONTROLS_HIDE_DELAY_MS);
     }
@@ -2031,9 +3512,10 @@ public class PlayerContenidoActivity extends AppCompatActivity {
      * Inyecta JS que simula mouseleave/mouseout para que el reproductor
      * oculte sus controles de forma nativa, y aplica un fade-out de CSS
      * sobre cualquier barra de controles restante.
+     * SOLO se ejecuta si el video ya está efectivamente en reproducción.
      */
     private void injectTvControlsHide() {
-        if (webView == null || !pageLoaded || isFinishing() || isDestroyed()) {
+        if (webView == null || !pageLoaded || isFinishing() || isDestroyed() || !isVideoPlaying) {
             return;
         }
         String js = "(function(){"
@@ -2060,5 +3542,3 @@ public class PlayerContenidoActivity extends AppCompatActivity {
         webView.evaluateJavascript(js, null);
     }
 }
-
-

@@ -34,9 +34,34 @@ public class SourceRouter {
         }
 
         List<ContentSource> ordered = new ArrayList<>();
+        String itemSource = item.getFuente();
+        boolean isCurrent = sv.edu.catolica.rex.network.smart.FirebaseEndpointResolver.isCurrentOrUpcomingYear(item.getAnio());
+
+        if (isCurrent) {
+            // Para estrenos del año actual, priorizar Cuevana 3 sobre AllCalidad
+            ContentSource cuevana = findByName("cuevana3");
+            if (cuevana != null) {
+                ordered.add(cuevana);
+            }
+        }
+
+        if (itemSource != null && !itemSource.trim().isEmpty()) {
+            ContentSource primary = findByName(itemSource);
+            if (primary != null && !ordered.contains(primary)) {
+                ordered.add(primary);
+            }
+        }
+        if (item.getDetailUrl() != null && item.getDetailUrl().contains("tudorama.com")) {
+            ContentSource tudorama = findByName("tudorama");
+            if (tudorama != null && !ordered.contains(tudorama)) {
+                ordered.add(0, tudorama);
+            }
+        }
         for (String name : priorityManager.getPriorityList()) {
             ContentSource source = findByName(name);
-            if (source != null) ordered.add(source);
+            if (source != null && !ordered.contains(source)) {
+                ordered.add(source);
+            }
         }
 
         for (ContentSource source : ordered) {

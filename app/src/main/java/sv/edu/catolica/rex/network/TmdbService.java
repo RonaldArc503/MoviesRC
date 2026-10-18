@@ -112,6 +112,7 @@ public class TmdbService {
      * Versión de compatibilidad (usa la nueva implementación paralela).
      * @deprecated Usar enrichMediaItemsParallel directamente desde background thread.
      */
+    @Deprecated
     public static void enrichMediaItems(List<MediaItem> items) {
         enrichMediaItemsParallel(items);
     }
@@ -323,9 +324,18 @@ public class TmdbService {
         }
         if (result.backdropUrl != null && !result.backdropUrl.isEmpty()) {
             item.setBackdrop(result.backdropUrl);
+        } else if (item.getBackdrop() == null || item.getBackdrop().trim().isEmpty()) {
+            if (result.posterUrl != null && !result.posterUrl.trim().isEmpty()) {
+                item.setBackdrop(result.posterUrl);
+            }
+        }
+        if (item.getImagen() == null || item.getImagen().trim().isEmpty()) {
+            if (result.backdropUrl != null && !result.backdropUrl.trim().isEmpty()) {
+                item.setImagen(result.backdropUrl);
+            }
         }
         String currentSynopsis = item.getSynopsis();
-        if ((currentSynopsis == null || currentSynopsis.trim().isEmpty())
+        if ((currentSynopsis == null || currentSynopsis.trim().isEmpty() || "Cargando sinopsis...".equals(currentSynopsis.trim()))
                 && result.overview != null && !result.overview.trim().isEmpty()) {
             item.setSynopsis(result.overview.trim());
         }
@@ -507,19 +517,44 @@ public class TmdbService {
             String response = httpGet(url.toString());
             JSONObject root = new JSONObject(response);
             JSONArray results = root.optJSONArray("results");
+
+            // Si la búsqueda con año no arrojó resultados, reintentar sin restricción de año
+            if ((results == null || results.length() == 0) && year != null && year.matches("\\d{4}")) {
+                String retryUrl = API_BASE + "/search/" + endpoint
+                        + "?api_key=" + URLEncoder.encode(BuildConfig.TMDB_API_KEY, "UTF-8")
+                        + "&language=es-ES&include_adult=false&query="
+                        + URLEncoder.encode(cleanTitle, "UTF-8");
+                String retryResponse = httpGet(retryUrl);
+                JSONObject retryRoot = new JSONObject(retryResponse);
+                results = retryRoot.optJSONArray("results");
+            }
+
             if (results == null || results.length() == 0) return null;
 
-            JSONObject first = results.optJSONObject(0);
-            if (first == null) return null;
+            // Elegir el primer resultado que contenga póster o backdrop
+            JSONObject chosen = null;
+            for (int i = 0; i < results.length() && i < 3; i++) {
+                JSONObject candidate = results.optJSONObject(i);
+                if (candidate != null) {
+                    if (chosen == null) chosen = candidate;
+                    String p = normalizeTmdbImagePath(candidate.optString("poster_path", ""));
+                    String b = normalizeTmdbImagePath(candidate.optString("backdrop_path", ""));
+                    if (!p.isEmpty() || !b.isEmpty()) {
+                        chosen = candidate;
+                        break;
+                    }
+                }
+            }
+            if (chosen == null) return null;
 
             TmdbResult result = new TmdbResult();
-            String posterPath = normalizeTmdbImagePath(first.optString("poster_path", ""));
+            String posterPath = normalizeTmdbImagePath(chosen.optString("poster_path", ""));
             if (!posterPath.isEmpty()) result.posterUrl = IMAGE_BASE + posterPath;
-            String backdropPath = normalizeTmdbImagePath(first.optString("backdrop_path", ""));
+            String backdropPath = normalizeTmdbImagePath(chosen.optString("backdrop_path", ""));
             if (!backdropPath.isEmpty()) result.backdropUrl = IMAGE_BASE + backdropPath;
-            result.overview = first.optString("overview", "");
-            result.tmdbId = first.optInt("id", 0);
-            result.tmdbMediaType = detectEndpointFromMediaType(endpoint, first.optString("media_type", ""));
+            result.overview = chosen.optString("overview", "");
+            result.tmdbId = chosen.optInt("id", 0);
+            result.tmdbMediaType = detectEndpointFromMediaType(endpoint, chosen.optString("media_type", ""));
             if (result.tmdbId > 0 && result.tmdbMediaType != null) {
                 result.imdbId = fetchExternalImdbId(result.tmdbMediaType, result.tmdbId);
             }
@@ -598,11 +633,16 @@ public class TmdbService {
         return value;
     }
 
-    private static String cleanTitle(String rawTitle) {
+    public static String cleanTitle(String rawTitle) {
         if (rawTitle == null) return "";
         return rawTitle
-                .replaceAll("\\(\\d{4}\\)", "")
+                .replaceAll("(?i)\\(\\s*\\d{4}\\s*\\)", "")
                 .replaceAll("\\[.*?\\]", "")
+                .replaceAll("(?i)\\b(audio\\s+latino|audio\\s+castellano|latino|castellano|subtitulado|sub|dual)\\b", "")
+                .replaceAll("(?i)\\b(1080p|720p|4k|uhd|hdrip|web-dl|webrip|dvdrip|bluray|cam|ts)\\b", "")
+                .replaceAll("(?i)[-:]?\\s*(temporada|temp|season)\\s*\\d+.*", "")
+                .replaceAll("(?i)[-:]?\\s*cap[ií]tulo\\s*\\d+.*", "")
+                .replaceAll("\\s+", " ")
                 .trim();
     }
 

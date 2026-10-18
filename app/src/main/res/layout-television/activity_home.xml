@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Layout TV estilo Netflix/REX
-    Sidebar angosto (64dp icono-only) + área de contenido amplia
-    Compatible: Android TV 4K, FHD, y tablets grandes
+    Layout TV estilo HBO Max / REX
+    Sidebar angosto (64dp icono-only) + Hero inmersivo + Rails de posters
+    Compatible: Android TV 4K, FHD y Google TV
 -->
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
@@ -10,7 +10,9 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="horizontal"
-    android:background="#0A0C10">
+    android:background="#0A0C10"
+    android:clipChildren="false"
+    android:clipToPadding="false">
 
     <!-- ══════════════════════════════════════════════
          SIDEBAR ANGOSTO (64dp) – solo íconos + logo
@@ -23,7 +25,8 @@
         android:background="#0E1119"
         android:paddingTop="20dp"
         android:paddingBottom="20dp"
-        android:gravity="center_horizontal">
+        android:gravity="center_horizontal"
+        android:elevation="6dp">
 
         <!-- Logo REX compacto -->
         <TextView
@@ -53,13 +56,14 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusDown="@id/menu_buscar">
+            android:nextFocusDown="@+id/menu_buscar">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
                 android:src="@drawable/ic_home"
-                android:tint="#FFFFFF" />
+                android:tint="#FFFFFF"
+                android:contentDescription="Inicio" />
         </LinearLayout>
 
         <!-- NAV: Buscar -->
@@ -73,17 +77,19 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusUp="@id/menu_home"
-            android:nextFocusDown="@id/menu_canales">
+            android:nextFocusUp="@+id/menu_home"
+            android:nextFocusDown="@+id/menu_canales"
+            android:nextFocusRight="@+id/rv_home_sections">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
                 android:src="@drawable/ic_search"
-                android:tint="#8A8F9E" />
+                android:tint="#8A8F9E"
+                android:contentDescription="Buscar" />
         </LinearLayout>
 
-        <!-- NAV: Categorías -->
+        <!-- NAV: Categorías / Canales -->
         <LinearLayout
             android:id="@+id/menu_canales"
             android:layout_width="match_parent"
@@ -94,38 +100,21 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusUp="@id/menu_buscar"
-            android:nextFocusDown="@id/menu_categorias">
+            android:nextFocusUp="@+id/menu_buscar"
+            android:nextFocusDown="@+id/menu_novelas"
+            android:nextFocusRight="@+id/rv_home_sections">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
                 android:src="@drawable/ic_chanels"
-                android:tint="#8A8F9E" />
+                android:tint="#8A8F9E"
+                android:contentDescription="Canales de TV" />
         </LinearLayout>
 
-            <LinearLayout
-                android:id="@+id/menu_football"
-                android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:orientation="vertical"
-                android:gravity="center"
-                android:layout_marginTop="4dp"
-                android:focusable="true"
-                android:focusableInTouchMode="true"
-                android:background="@drawable/bg_tv_menu_item"
-                android:nextFocusUp="@id/menu_canales"
-                android:nextFocusDown="@id/menu_categorias">
-
-                <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:src="@drawable/ic_sports"
-                android:tint="#8A8F9E" />
-            </LinearLayout>
-
+        <!-- NAV: Novelas -->
         <LinearLayout
-            android:id="@+id/menu_categorias"
+            android:id="@+id/menu_novelas"
             android:layout_width="match_parent"
             android:layout_height="56dp"
             android:orientation="vertical"
@@ -134,14 +123,16 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusUp="@id/menu_football"
-            android:nextFocusDown="@id/menu_series">
+            android:nextFocusUp="@+id/menu_canales"
+            android:nextFocusDown="@+id/menu_series"
+            android:nextFocusRight="@+id/rv_home_sections">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
-                android:src="@drawable/ic_grid"
-                android:tint="#8A8F9E" />
+                android:src="@drawable/ic_novelas"
+                android:tint="#8A8F9E"
+                android:contentDescription="Telenovelas" />
         </LinearLayout>
 
         <!-- NAV: Series -->
@@ -155,14 +146,16 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusUp="@id/menu_categorias"
-            android:nextFocusDown="@id/menu_doramas">
+            android:nextFocusUp="@+id/menu_novelas"
+            android:nextFocusDown="@+id/menu_doramas"
+            android:nextFocusRight="@+id/rv_home_sections">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
                 android:src="@drawable/ic_series"
-                android:tint="#8A8F9E" />
+                android:tint="#8A8F9E"
+                android:contentDescription="Series" />
         </LinearLayout>
 
         <!-- NAV: Doramas -->
@@ -176,13 +169,16 @@
             android:focusable="true"
             android:focusableInTouchMode="true"
             android:background="@drawable/bg_tv_menu_item"
-            android:nextFocusUp="@id/menu_series">
+            android:nextFocusUp="@+id/menu_series"
+            android:nextFocusDown="@+id/menu_ajustes"
+            android:nextFocusRight="@+id/rv_home_sections">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
                 android:src="@drawable/ic_star"
-                android:tint="#8A8F9E" />
+                android:tint="#8A8F9E"
+                android:contentDescription="Doramas" />
         </LinearLayout>
 
         <!-- Spacer -->
@@ -200,45 +196,94 @@
             android:gravity="center"
             android:focusable="true"
             android:focusableInTouchMode="true"
-            android:background="@drawable/bg_tv_menu_item">
+            android:background="@drawable/bg_tv_menu_item"
+            android:nextFocusUp="@+id/menu_doramas"
+            android:nextFocusRight="@+id/rv_home_sections">
 
             <ImageView
                 android:layout_width="22dp"
                 android:layout_height="22dp"
                 android:src="@drawable/ic_settings"
-                android:tint="#8A8F9E" />
+                android:tint="#8A8F9E"
+                android:contentDescription="Ajustes" />
         </LinearLayout>
 
     </LinearLayout>
 
     <!-- ══════════════════════════════════════════════
-         ÁREA PRINCIPAL DE CONTENIDO
+         ÁREA PRINCIPAL DE CONTENIDO ESTILO HBO MAX
          ══════════════════════════════════════════════ -->
     <FrameLayout
+        android:id="@+id/content_area_tv"
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
-        <LinearLayout
+        <!-- Scroll vertical continuo que integra Hero + Secciones sin desfases -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/tv_nested_scroll"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:orientation="vertical">
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:focusable="false"
+            android:descendantFocusability="afterDescendants">
 
-            <!-- ── HERO BANNER ── -->
-        
-
-            <!-- ── SECCIONES (RecyclerView vertical) ── -->
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rv_home_sections"
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:clipChildren="false"
                 android:clipToPadding="false"
-                android:paddingTop="8dp"
-                android:paddingBottom="32dp"
-                android:overScrollMode="never" />
+                android:focusable="false">
 
-        </LinearLayout>
+                <!-- ── HERO CAROUSEL INMERSIVO (HBO Max Widescreen) ── -->
+                <FrameLayout
+                    android:id="@+id/hero_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="460dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:descendantFocusability="afterDescendants"
+                    android:visibility="gone">
+
+                    <androidx.viewpager2.widget.ViewPager2
+                        android:id="@+id/vp_hero"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:clipChildren="false"
+                        android:clipToPadding="false"
+                        android:descendantFocusability="afterDescendants" />
+
+                    <!-- Paginación estilo HBO Max (Píldora activa + puntos) -->
+                    <LinearLayout
+                        android:id="@+id/dots_container"
+                        android:layout_width="wrap_content"
+                        android:layout_height="14dp"
+                        android:layout_gravity="bottom|center_horizontal"
+                        android:layout_marginBottom="16dp"
+                        android:gravity="center"
+                        android:orientation="horizontal" />
+                </FrameLayout>
+
+                <!-- ── RAILS DE SECCIONES (RecyclerView vertical) ── -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rv_home_sections"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nestedScrollingEnabled="false"
+                    android:clipToPadding="false"
+                    android:clipChildren="false"
+                    android:paddingBottom="140dp"
+                    android:overScrollMode="never"
+                    android:descendantFocusability="afterDescendants" />
+
+            </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
 
         <!-- Loading spinner -->
         <ProgressBar
@@ -246,7 +291,7 @@
             android:layout_width="48dp"
             android:layout_height="48dp"
             android:layout_gravity="center"
-            android:indeterminateTint="#E63540"
+            android:indeterminateTint="#FFFFFF"
             android:visibility="gone" />
 
     </FrameLayout>

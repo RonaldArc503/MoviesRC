@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Color;
 import android.text.TextUtils;
 import android.util.SparseIntArray;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -11,6 +12,7 @@ import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.cardview.widget.CardView;
 import androidx.recyclerview.widget.DiffUtil;
@@ -24,6 +26,8 @@ import java.util.Locale;
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.Section;
+import sv.edu.catolica.rex.repository.UserDataManager;
+import sv.edu.catolica.rex.ui.novelas.NovelasActivity;
 
 public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHolder> {
 
@@ -51,45 +55,34 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         this.context = context;
         this.listener = listener;
         this.isTv = isTv;
+        this.sharedViewPool.setMaxRecycledViews(0, isTv ? 25 : 15);
         if (initialSections != null) {
             this.sections.addAll(initialSections);
         }
         setHasStableIds(true);
     }
 
+    private View activeRemoveOverlay = null;
+
     public void setOnFocusPositionChangedListener(OnFocusPositionChangedListener listener) {
         this.focusPositionChangedListener = listener;
     }
 
+    public boolean dismissOpenOverlays() {
+        if (activeRemoveOverlay != null && activeRemoveOverlay.getVisibility() == View.VISIBLE) {
+            activeRemoveOverlay.setVisibility(View.GONE);
+            activeRemoveOverlay = null;
+            return true;
+        }
+        return false;
+    }
+
     public void setSections(List<Section> newSections) {
-        final List<Section> oldCopy = new ArrayList<>(sections);
-        final List<Section> newCopy = newSections == null ? new ArrayList<>() : new ArrayList<>(newSections);
-        DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(new DiffUtil.Callback() {
-            @Override
-            public int getOldListSize() {
-                return oldCopy.size();
-            }
-
-            @Override
-            public int getNewListSize() {
-                return newCopy.size();
-            }
-
-            @Override
-            public boolean areItemsTheSame(int oldItemPosition, int newItemPosition) {
-                return sectionIdOf(oldCopy.get(oldItemPosition)) == sectionIdOf(newCopy.get(newItemPosition));
-            }
-
-            @Override
-            public boolean areContentsTheSame(int oldItemPosition, int newItemPosition) {
-                return sectionSignature(oldCopy.get(oldItemPosition))
-                        .equals(sectionSignature(newCopy.get(newItemPosition)));
-            }
-        });
-
         sections.clear();
-        sections.addAll(newCopy);
-        diffResult.dispatchUpdatesTo(this);
+        if (newSections != null) {
+            sections.addAll(newSections);
+        }
+        notifyDataSetChanged();
     }
 
     public int getLastFocusedSection() {
@@ -161,21 +154,25 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
 
             rvItems.setLayoutManager(rowLayoutManager);
             rvItems.setNestedScrollingEnabled(false);
-            rvItems.setHasFixedSize(true);
             rvItems.setItemAnimator(null);
-            rvItems.setItemViewCacheSize(isTv ? 20 : 8);
+            rvItems.setHasFixedSize(true);
+            rvItems.setItemViewCacheSize(4);
             rvItems.setRecycledViewPool(sharedViewPool);
             rvItems.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
             rvItems.setFocusable(false);
             rvItems.setFocusableInTouchMode(false);
+            if (isTv) {
+                rvItems.setClipChildren(false);
+                rvItems.setClipToPadding(false);
+            }
 
-            itemAdapter = new HorizontalItemAdapter();
+            itemAdapter = new HorizontalItemAdapter(this);
             rvItems.setAdapter(itemAdapter);
         }
 
         void bind(Section section, int sectionPosition) {
             tvSectionTitle.setText(section.getTitle());
-            itemAdapter.submitItems(section.getItems(), sectionPosition);
+            itemAdapter.submitItems(section.getItems(), section.getTitle());
 
             if (isTv) {
                 int rememberedIndex = sectionFocusedIndex.get(sectionPosition, 0);
@@ -188,14 +185,16 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
 
     class HorizontalItemAdapter extends RecyclerView.Adapter<HorizontalItemAdapter.ViewHolder> {
         private final List<MediaItem> items = new ArrayList<>();
-        private int sectionPosition = RecyclerView.NO_POSITION;
+        private final SectionViewHolder sectionViewHolder;
+        private String sectionTitle = "";
 
-        HorizontalItemAdapter() {
+        HorizontalItemAdapter(SectionViewHolder sectionViewHolder) {
+            this.sectionViewHolder = sectionViewHolder;
             setHasStableIds(true);
         }
 
-        void submitItems(List<MediaItem> newItems, int sectionPosition) {
-            this.sectionPosition = sectionPosition;
+        void submitItems(List<MediaItem> newItems, String sectionTitle) {
+            this.sectionTitle = sectionTitle != null ? sectionTitle : "";
             items.clear();
             if (newItems != null) {
                 items.addAll(newItems);
@@ -205,6 +204,7 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
 
         @Override
         public long getItemId(int position) {
+            if (position < 0 || position >= items.size()) return RecyclerView.NO_ID;
             MediaItem item = items.get(position);
             String key = (item.getDetailUrl() == null ? "" : item.getDetailUrl())
                     + "|" + (item.getTmdbId() > 0 ? item.getTmdbId() : item.getPostId())
@@ -217,12 +217,12 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             View view = LayoutInflater.from(parent.getContext())
                     .inflate(R.layout.item_horizontal_card, parent, false);
-            return new ViewHolder(view, isTv, context);
+            return new ViewHolder(view, isTv, context, sectionViewHolder);
         }
 
         @Override
         public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
-            holder.bind(items.get(position), listener, sectionPosition, position, getItemCount());
+            holder.bind(items.get(position), listener, sectionTitle);
         }
 
         @Override
@@ -233,41 +233,55 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         class ViewHolder extends RecyclerView.ViewHolder {
             private static final int TV_CARD_WIDTH_DP = 150;
             private static final int TV_CARD_HEIGHT_DP = 225;
-            private static final int TV_IMAGE_HEIGHT_DP = 200;
+            private static final int TV_WIDE_WIDTH_DP = 230;
+            private static final int TV_WIDE_HEIGHT_DP = 135;
+
             private static final int PHONE_CARD_WIDTH_DP = 130;
             private static final int PHONE_CARD_HEIGHT_DP = 224;
             private static final int PHONE_IMAGE_HEIGHT_DP = 170;
 
             final CardView cardView;
             final ImageView ivPoster;
+            final ImageView ivPlayOverlay;
             final TextView tvTitle;
             final TextView tvYear;
             final TextView tvRating;
             final View progressContainer;
             final View progressBg;
             final View progressFg;
+            final View badgeWrapperHbo;
+            final TextView tvBadgeHbo;
+            final View tileOutlineTv;
+            final View overlayRemoveFav;
             final boolean isTv;
+            final SectionViewHolder sectionViewHolder;
 
-            ViewHolder(@NonNull View itemView, boolean isTv, Context context) {
+            ViewHolder(@NonNull View itemView, boolean isTv, Context context, SectionViewHolder sectionViewHolder) {
                 super(itemView);
                 this.isTv = isTv;
+                this.sectionViewHolder = sectionViewHolder;
                 cardView = (CardView) itemView;
                 ivPoster = itemView.findViewById(R.id.iv_poster);
+                ivPlayOverlay = itemView.findViewById(R.id.iv_play_overlay);
                 tvTitle = itemView.findViewById(R.id.tv_title);
                 tvYear = itemView.findViewById(R.id.tv_year);
                 tvRating = itemView.findViewById(R.id.tv_rating);
                 progressContainer = itemView.findViewById(R.id.progress_container);
                 progressBg = itemView.findViewById(R.id.progress_bg);
                 progressFg = itemView.findViewById(R.id.progress_fg);
+                badgeWrapperHbo = itemView.findViewById(R.id.badge_wrapper_hbo);
+                tvBadgeHbo = itemView.findViewById(R.id.tv_badge_hbo);
+                tileOutlineTv = itemView.findViewById(R.id.tile_outline_tv);
+                overlayRemoveFav = itemView.findViewById(R.id.overlay_remove_fav);
 
                 float density = context.getResources().getDisplayMetrics().density;
 
-                cardView.setCardBackgroundColor(Color.parseColor("#161A24"));
-                cardView.setRadius(10 * density);
+                cardView.setCardBackgroundColor(Color.parseColor("#141720"));
+                cardView.setRadius(12 * density);
                 cardView.setCardElevation(0);
 
                 if (isTv) {
-                    applyTvDimensions(density);
+                    applyTvDimensions(density, false);
                     setupTvFocus(density);
                 } else {
                     applyPhoneDimensions(density);
@@ -275,10 +289,54 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 }
             }
 
-            private void applyTvDimensions(float density) {
-                int cardW = (int) (TV_CARD_WIDTH_DP * density);
-                int cardH = (int) (TV_CARD_HEIGHT_DP * density);
-                int imgH = (int) (TV_IMAGE_HEIGHT_DP * density);
+            private int getLiveSectionPosition() {
+                if (sectionViewHolder != null) {
+                    int pos = sectionViewHolder.getBindingAdapterPosition();
+                    if (pos != RecyclerView.NO_POSITION) return pos;
+                    return sectionViewHolder.getAbsoluteAdapterPosition();
+                }
+                return RecyclerView.NO_POSITION;
+            }
+
+            private int getLiveItemPosition() {
+                int pos = getBindingAdapterPosition();
+                if (pos != RecyclerView.NO_POSITION) return pos;
+                return getAbsoluteAdapterPosition();
+            }
+
+            private void showRemoveOverlay() {
+                if (overlayRemoveFav != null) {
+                    if (activeRemoveOverlay != null && activeRemoveOverlay != overlayRemoveFav) {
+                        activeRemoveOverlay.setVisibility(View.GONE);
+                    }
+                    overlayRemoveFav.setVisibility(View.VISIBLE);
+                    activeRemoveOverlay = overlayRemoveFav;
+                }
+            }
+
+            private void hideRemoveOverlay() {
+                if (overlayRemoveFav != null) {
+                    overlayRemoveFav.setVisibility(View.GONE);
+                    if (activeRemoveOverlay == overlayRemoveFav) {
+                        activeRemoveOverlay = null;
+                    }
+                }
+            }
+
+            private void performRemoveFavorite(MediaItem item) {
+                if (item == null) return;
+                hideRemoveOverlay();
+                Context ctx = itemView.getContext();
+                UserDataManager.getInstance(ctx).removeFromFavorites(item);
+                Toast.makeText(ctx, "Quitado de favoritos", Toast.LENGTH_SHORT).show();
+                if (ctx instanceof HomeActivity) {
+                    ((HomeActivity) ctx).runOnUiThread(() -> ((HomeActivity) ctx).refreshUserDataSections());
+                }
+            }
+
+            private void applyTvDimensions(float density, boolean isWide) {
+                int cardW = (int) ((isWide ? TV_WIDE_WIDTH_DP : TV_CARD_WIDTH_DP) * density);
+                int cardH = (int) ((isWide ? TV_WIDE_HEIGHT_DP : TV_CARD_HEIGHT_DP) * density);
 
                 ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) cardView.getLayoutParams();
                 if (lp == null) {
@@ -286,17 +344,18 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 }
                 lp.width = cardW;
                 lp.height = cardH;
-                lp.setMarginEnd((int) (12 * density));
+                lp.setMarginEnd((int) (14 * density));
                 cardView.setLayoutParams(lp);
 
                 ViewGroup.LayoutParams imgLp = ivPoster.getLayoutParams();
                 if (imgLp != null) {
-                    imgLp.height = imgH;
+                    imgLp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+                    imgLp.height = ViewGroup.LayoutParams.MATCH_PARENT;
                     ivPoster.setLayoutParams(imgLp);
                 }
 
-                tvTitle.setTextSize(13f);
-                tvYear.setTextSize(11f);
+                tvTitle.setTextSize(12f);
+                tvYear.setTextSize(10f);
                 if (tvRating != null) {
                     tvRating.setTextSize(10f);
                 }
@@ -306,7 +365,7 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 cardView.setFocusable(true);
                 cardView.setFocusableInTouchMode(true);
                 cardView.setClickable(true);
-                cardView.setAlpha(0.86f);
+                cardView.setAlpha(0.88f);
                 cardView.setCardElevation(0);
                 cardView.setForeground(null);
             }
@@ -331,8 +390,8 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     ivPoster.setLayoutParams(imgLp);
                 }
 
-                tvTitle.setTextSize(11f);
-                tvYear.setTextSize(10f);
+                tvTitle.setTextSize(12f);
+                tvYear.setTextSize(11f);
             }
 
             private void disableFocusForPhone() {
@@ -343,9 +402,61 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 cardView.setCardElevation(0);
             }
 
-            void bind(MediaItem item, OnItemClickListener listener, int sectionPos, int itemPos, int totalItems) {
+            void bind(MediaItem item, OnItemClickListener listener, String sectionTitle) {
+                hideRemoveOverlay();
                 tvTitle.setText(item.getTitulo());
                 tvYear.setText(item.getAnio());
+
+                boolean isContinueWatching = (item.getFuente() != null && item.getFuente().startsWith("continue_watching:"))
+                        || item.getProgress() > 0;
+                if (ivPlayOverlay != null) {
+                    ivPlayOverlay.setVisibility(isContinueWatching ? View.VISIBLE : View.GONE);
+                }
+
+                boolean isFavSection = sectionTitle != null && (
+                        sectionTitle.contains("Favoritos") ||
+                        sectionTitle.contains("Mi Lista") ||
+                        sectionTitle.contains("Favorito")
+                );
+
+                if (isTv) {
+                    float density = itemView.getResources().getDisplayMetrics().density;
+                    applyTvDimensions(density, isContinueWatching);
+
+                    if (badgeWrapperHbo != null && tvBadgeHbo != null) {
+                        String badgeText = null;
+                        if (!isContinueWatching) {
+                            String anio = item.getAnio();
+                            if (anio != null && (anio.contains("2026") || anio.contains("2025"))) {
+                                badgeText = "Recién Añadido";
+                            } else if ("tv".equalsIgnoreCase(item.getMediaType()) || (item.getFuente() != null && item.getFuente().contains("series"))) {
+                                badgeText = "Nuevo Episodio";
+                            } else if (getLiveItemPosition() == 0 && getLiveSectionPosition() < 2) {
+                                badgeText = "Nuevo";
+                            }
+                        }
+                        if (badgeText != null) {
+                            tvBadgeHbo.setText(badgeText);
+                            badgeWrapperHbo.setVisibility(View.VISIBLE);
+                        } else {
+                            badgeWrapperHbo.setVisibility(View.GONE);
+                        }
+                    }
+
+                    View ivMore = itemView.findViewById(R.id.iv_more_tv);
+                    if (ivMore != null) {
+                        ivMore.setVisibility(View.VISIBLE);
+                    }
+
+                    if (isContinueWatching) {
+                        tvTitle.setVisibility(View.VISIBLE);
+                        tvYear.setVisibility(View.VISIBLE);
+                    } else {
+                        boolean hasImage = item.getImagen() != null && !item.getImagen().isEmpty();
+                        tvTitle.setVisibility(hasImage ? View.GONE : View.VISIBLE);
+                        tvYear.setVisibility(View.GONE);
+                    }
+                }
 
                 if (tvRating != null) {
                     double rating = item.getRating();
@@ -379,8 +490,11 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     }
                 }
 
-                String primaryPosterUrl = resolvePreferredImageUrl(item);
+                String primaryPosterUrl = resolvePreferredImageUrl(item, isContinueWatching && isTv);
                 String httpsFallbackUrl = toHttpsUrl(primaryPosterUrl);
+
+                int overrideW = isTv ? (isContinueWatching ? 460 : 310) : 260;
+                int overrideH = isTv ? (isContinueWatching ? 260 : 460) : 390;
 
                 if (TextUtils.isEmpty(primaryPosterUrl)) {
                     ivPoster.setImageResource(R.drawable.placeholder_poster);
@@ -391,11 +505,11 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                                     ? DrawableTransitionOptions.withCrossFade(0)
                                     : DrawableTransitionOptions.withCrossFade(120))
                             .placeholder(R.drawable.placeholder_poster)
-                            .override(isTv ? 300 : 260, isTv ? 450 : 390)
+                            .override(overrideW, overrideH)
                             .error(Glide.with(itemView.getContext())
                                     .load(httpsFallbackUrl)
                                     .placeholder(R.drawable.placeholder_poster)
-                                    .override(isTv ? 300 : 260, isTv ? 450 : 390)
+                                    .override(overrideW, overrideH)
                                     .error(R.drawable.placeholder_poster)
                                     .centerCrop())
                             .centerCrop()
@@ -407,17 +521,34 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                                     ? DrawableTransitionOptions.withCrossFade(0)
                                     : DrawableTransitionOptions.withCrossFade(120))
                             .placeholder(R.drawable.placeholder_poster)
-                            .override(isTv ? 300 : 260, isTv ? 450 : 390)
+                            .override(overrideW, overrideH)
                             .error(R.drawable.placeholder_poster)
                             .centerCrop()
                             .into(ivPoster);
                 }
 
                 itemView.setOnClickListener(v -> {
+                    if (overlayRemoveFav != null && overlayRemoveFav.getVisibility() == View.VISIBLE) {
+                        performRemoveFavorite(item);
+                        return;
+                    }
                     if (listener != null) {
                         listener.onItemClick(item);
                     }
                 });
+
+                itemView.setOnLongClickListener(v -> {
+                    if (isFavSection) {
+                        v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                        showRemoveOverlay();
+                        return true;
+                    }
+                    return false;
+                });
+
+                if (overlayRemoveFav != null) {
+                    overlayRemoveFav.setOnClickListener(v -> performRemoveFavorite(item));
+                }
 
                 if (!isTv) {
                     itemView.setOnKeyListener(null);
@@ -427,19 +558,30 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                 itemView.setOnFocusChangeListener((v, hasFocus) -> {
                     cardView.setSelected(hasFocus);
                     v.animate()
-                            .scaleX(hasFocus ? 1.05f : 1.0f)
-                            .scaleY(hasFocus ? 1.05f : 1.0f)
-                            .alpha(hasFocus ? 1.0f : 0.86f)
+                            .scaleX(hasFocus ? 1.06f : 1.0f)
+                            .scaleY(hasFocus ? 1.06f : 1.0f)
+                            .alpha(hasFocus ? 1.0f : 0.88f)
                             .setDuration(100L)
-                            .setInterpolator(new DecelerateInterpolator())
+                            .withLayer()
+                            .setInterpolator(new DecelerateInterpolator(1.5f))
                             .start();
-                    float density = v.getResources().getDisplayMetrics().density;
-                    cardView.setCardElevation(hasFocus ? 2 * density : 0);
                     cardView.setForeground(hasFocus
-                            ? v.getContext().getResources().getDrawable(R.drawable.bg_card_focused, null)
+                            ? androidx.core.content.ContextCompat.getDrawable(v.getContext(), R.drawable.bg_card_focused_hbomax)
                             : null);
-                    if (hasFocus) {
-                        onItemFocused(sectionPos, itemPos);
+
+                    if (!hasFocus) {
+                        hideRemoveOverlay();
+                    } else {
+                        int liveSec = getLiveSectionPosition();
+                        int liveIt = getLiveItemPosition();
+                        if (liveSec != RecyclerView.NO_POSITION && liveIt != RecyclerView.NO_POSITION) {
+                            onItemFocused(liveSec, liveIt);
+                            if (context instanceof HomeActivity) {
+                                ((HomeActivity) context).scrollTvToSection(liveSec);
+                            } else if (context instanceof NovelasActivity) {
+                                ((NovelasActivity) context).scrollTvToSection(liveSec);
+                            }
+                        }
                     }
                 });
 
@@ -447,25 +589,72 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     if (event.getAction() != KeyEvent.ACTION_DOWN) {
                         return false;
                     }
-                    if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && itemPos <= 0) {
+
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                        if (overlayRemoveFav != null && overlayRemoveFav.getVisibility() == View.VISIBLE) {
+                            performRemoveFavorite(item);
+                            return true;
+                        }
+                    }
+
+                    if (keyCode == KeyEvent.KEYCODE_BACK) {
+                        if (overlayRemoveFav != null && overlayRemoveFav.getVisibility() == View.VISIBLE) {
+                            hideRemoveOverlay();
+                            return true;
+                        }
+                    }
+
+                    int liveSec = getLiveSectionPosition();
+                    int liveIt = getLiveItemPosition();
+                    int count = getItemCount();
+
+                    if (liveSec == RecyclerView.NO_POSITION || liveIt == RecyclerView.NO_POSITION) {
+                        return false;
+                    }
+
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && liveIt <= 0) {
+                        hideRemoveOverlay();
                         // Permitir que el foco salga hacia la izquierda (sidebar de menú)
                         return false;
                     }
-                    if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && itemPos >= totalItems - 1) {
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && liveIt >= count - 1) {
                         // Keep focus on row end instead of jumping to unrelated rows.
                         return true;
                     }
                     if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                        return handleVerticalFocusMove(sectionPos, itemPos, +1);
+                        hideRemoveOverlay();
+                        return handleVerticalFocusMove(liveSec, liveIt, +1);
                     }
                     if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                        return handleVerticalFocusMove(sectionPos, itemPos, -1);
+                        hideRemoveOverlay();
+                        if (liveSec <= 0) {
+                            if (context instanceof HomeActivity) {
+                                ((HomeActivity) context).focusHeroPlayButton();
+                                return true;
+                            } else if (context instanceof NovelasActivity) {
+                                ((NovelasActivity) context).scrollTvToSection(0);
+                                if (liveIt > 0) {
+                                    focusItemInSection(0, 0, true, false);
+                                    return true;
+                                }
+                                return false;
+                            }
+                            // En SearchActivity u otras vistas, permitir que el foco suba al buscador o botón volver
+                            return false;
+                        }
+                        return handleVerticalFocusMove(liveSec, liveIt, -1);
                     }
                     return false;
                 });
             }
 
-            private String resolvePreferredImageUrl(MediaItem item) {
+            private String resolvePreferredImageUrl(MediaItem item, boolean isWide) {
+                if (isWide && item != null) {
+                    String backdrop = sanitizeImageUrl(item.getBackdrop());
+                    if (!backdrop.isEmpty()) {
+                        return backdrop;
+                    }
+                }
                 String poster = sanitizeImageUrl(item != null ? item.getImagen() : null);
                 if (!poster.isEmpty()) {
                     return poster;
@@ -488,6 +677,9 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
                     return "https:" + value;
                 }
                 if (value.startsWith("/")) {
+                    if (value.startsWith("/poster/")) {
+                        return "https://wv3.cuevana3.eu" + value;
+                    }
                     return "https://allcalidad.re" + value;
                 }
                 if (!value.startsWith("http://") && !value.startsWith("https://")) {
@@ -527,9 +719,14 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
             return true;
         }
 
-        // Section changes always start at the first item and align the row at the start.
-        sectionFocusedIndex.put(targetSection, 0);
-        focusItemInSection(targetSection, 0, true, true);
+        // Mantener la posición horizontal del elemento actual para navegación espacial natural 2D
+        int preferredItem = sectionFocusedIndex.get(targetSection, currentItem);
+        Section targetSecObj = sections.get(targetSection);
+        int maxItems = (targetSecObj != null && targetSecObj.getItems() != null) ? targetSecObj.getItems().size() : 1;
+        int clampedItem = Math.max(0, Math.min(preferredItem, maxItems - 1));
+
+        sectionFocusedIndex.put(targetSection, clampedItem);
+        focusItemInSection(targetSection, clampedItem, false, false);
         return true;
     }
 
@@ -540,11 +737,22 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
     private void focusItemInSection(int sectionPosition, int itemPosition,
                                     boolean resetRowToStart,
                                     boolean alignSectionTop) {
-        if (hostRecyclerView == null) {
+        focusItemInSectionWithRetry(sectionPosition, itemPosition, resetRowToStart, alignSectionTop, 0);
+    }
+
+    private void focusItemInSectionWithRetry(int sectionPosition, int itemPosition,
+                                            boolean resetRowToStart,
+                                            boolean alignSectionTop,
+                                            int retryCount) {
+        if (hostRecyclerView == null || sectionPosition < 0 || sectionPosition >= sections.size()) {
             return;
         }
 
-        if (alignSectionTop) {
+        if (context instanceof HomeActivity) {
+            ((HomeActivity) context).scrollTvToSection(sectionPosition);
+        } else if (context instanceof NovelasActivity) {
+            ((NovelasActivity) context).scrollTvToSection(sectionPosition);
+        } else {
             RecyclerView.LayoutManager manager = hostRecyclerView.getLayoutManager();
             if (manager instanceof LinearLayoutManager) {
                 ((LinearLayoutManager) manager).scrollToPositionWithOffset(sectionPosition, 0);
@@ -555,9 +763,16 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
 
         RecyclerView.ViewHolder holder = hostRecyclerView.findViewHolderForAdapterPosition(sectionPosition);
         if (!(holder instanceof SectionViewHolder)) {
-            hostRecyclerView.scrollToPosition(sectionPosition);
-            hostRecyclerView.post(() -> focusItemInSection(sectionPosition, itemPosition,
-                    resetRowToStart, alignSectionTop));
+            if (retryCount < 8) {
+                RecyclerView.LayoutManager manager = hostRecyclerView.getLayoutManager();
+                if (manager instanceof LinearLayoutManager) {
+                    ((LinearLayoutManager) manager).scrollToPositionWithOffset(sectionPosition, 0);
+                } else {
+                    hostRecyclerView.scrollToPosition(sectionPosition);
+                }
+                hostRecyclerView.postDelayed(() -> focusItemInSectionWithRetry(sectionPosition, itemPosition,
+                        resetRowToStart, alignSectionTop, retryCount + 1), 35L);
+            }
             return;
         }
 
@@ -568,13 +783,13 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
         }
 
         int clamped = Math.max(0, Math.min(itemPosition, count - 1));
-    int targetRowPos = resetRowToStart ? 0 : Math.max(0, clamped - 1);
-    sectionHolder.rowLayoutManager.scrollToPositionWithOffset(targetRowPos, 0);
+        int targetRowPos = resetRowToStart ? 0 : Math.max(0, clamped - 1);
+        sectionHolder.rowLayoutManager.scrollToPositionWithOffset(targetRowPos, 0);
 
         sectionHolder.rvItems.post(() -> {
             RecyclerView.ViewHolder itemHolder =
                     sectionHolder.rvItems.findViewHolderForAdapterPosition(clamped);
-            if (itemHolder != null) {
+            if (itemHolder != null && itemHolder.itemView != null) {
                 itemHolder.itemView.requestFocus();
                 return;
             }
@@ -583,7 +798,7 @@ public class HomeAdapter extends RecyclerView.Adapter<HomeAdapter.SectionViewHol
             sectionHolder.rvItems.post(() -> {
                 RecyclerView.ViewHolder fallback =
                         sectionHolder.rvItems.findViewHolderForAdapterPosition(clamped);
-                if (fallback != null) {
+                if (fallback != null && fallback.itemView != null) {
                     fallback.itemView.requestFocus();
                 }
             });

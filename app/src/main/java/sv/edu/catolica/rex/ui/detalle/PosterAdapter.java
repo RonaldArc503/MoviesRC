@@ -62,13 +62,27 @@ public class PosterAdapter extends RecyclerView.Adapter<PosterAdapter.PosterView
         MediaItem item = items.get(position);
         holder.tvPosterTitle.setText(item.getTitulo());
 
-        String poster = item.getImagen();
-        if (poster == null || poster.isEmpty()) poster = item.getBackdrop();
-        if (poster == null || poster.isEmpty()) {
+        String poster = sanitizeImageUrl(item.getImagen());
+        String backdrop = sanitizeImageUrl(item.getBackdrop());
+        String primary = !poster.isEmpty() ? poster : backdrop;
+        String fallback = (!backdrop.isEmpty() && !backdrop.equals(primary)) ? backdrop : "";
+
+        if (primary.isEmpty()) {
             holder.imgPoster.setImageResource(R.drawable.placeholder_poster);
+        } else if (!fallback.isEmpty()) {
+            Glide.with(holder.itemView.getContext())
+                    .load(primary)
+                    .placeholder(R.drawable.placeholder_poster)
+                    .error(Glide.with(holder.itemView.getContext())
+                            .load(fallback)
+                            .placeholder(R.drawable.placeholder_poster)
+                            .error(R.drawable.placeholder_poster)
+                            .centerCrop())
+                    .centerCrop()
+                    .into(holder.imgPoster);
         } else {
             Glide.with(holder.itemView.getContext())
-                    .load(poster)
+                    .load(primary)
                     .placeholder(R.drawable.placeholder_poster)
                     .error(R.drawable.placeholder_poster)
                     .centerCrop()
@@ -83,6 +97,15 @@ public class PosterAdapter extends RecyclerView.Adapter<PosterAdapter.PosterView
 
         holder.itemView.setOnClickListener(v -> {
             if (listener != null) listener.onPosterClick(item);
+        });
+
+        holder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
+            v.setSelected(hasFocus);
+            v.animate()
+                    .scaleX(hasFocus ? 1.05f : 1f)
+                    .scaleY(hasFocus ? 1.05f : 1f)
+                    .setDuration(120L)
+                    .start();
         });
     }
 
@@ -102,5 +125,23 @@ public class PosterAdapter extends RecyclerView.Adapter<PosterAdapter.PosterView
             tvPosterTitle = itemView.findViewById(R.id.tv_poster_title);
             tvMatch = itemView.findViewById(R.id.tv_poster_match);
         }
+    }
+
+    private static String sanitizeImageUrl(String rawUrl) {
+        if (rawUrl == null) return "";
+        String value = rawUrl.trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) return "";
+        if (value.toLowerCase(Locale.ROOT).contains("null")) return "";
+        if (value.startsWith("//")) return "https:" + value;
+        if (value.startsWith("/")) {
+            if (value.startsWith("/poster/")) {
+                return "https://wv3.cuevana3.eu" + value;
+            }
+            return "https://allcalidad.re" + value;
+        }
+        if (!value.startsWith("http://") && !value.startsWith("https://")) {
+            return "https://" + value;
+        }
+        return value;
     }
 }

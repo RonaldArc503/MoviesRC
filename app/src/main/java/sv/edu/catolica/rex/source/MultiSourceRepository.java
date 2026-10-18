@@ -16,6 +16,18 @@ public class MultiSourceRepository {
         return new ArrayList<>(sources);
     }
 
+    public ContentSource findByName(String name) {
+        if (name == null) return null;
+        String normalized = name.trim().toLowerCase();
+        if (normalized.isEmpty()) return null;
+        for (ContentSource s : sources) {
+            if (s != null && s.getName() != null && s.getName().trim().toLowerCase().equals(normalized)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
     public List<MediaItem> searchAll(String q, int limit) {
         List<MediaItem> all = new ArrayList<>();
         for (ContentSource s : sources) {

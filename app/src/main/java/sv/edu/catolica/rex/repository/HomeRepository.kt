@@ -19,10 +19,18 @@ data class HomeDataResult(
 
 class HomeRepository {
 
-    suspend fun fetchHomeData(): HomeDataResult = withContext(Dispatchers.IO) {
+    suspend fun fetchHomeData(onFeaturedReady: (HomeDataResult) -> Unit = {}): HomeDataResult = withContext(Dispatchers.IO) {
         coroutineScope {
             // Ejecutar llamadas en paralelo mediante async
-            val featuredDeferred = async { safeCall { AllCalidadScraper.getFeaturedMovies() } }
+            val featuredDeferred = async {
+                val items = mapItems(safeCall { AllCalidadScraper.getFeaturedMovies() }, 10)
+                if (items.isNotEmpty()) {
+                    onFeaturedReady(HomeDataResult(
+                        listOf(Section("🔥 Destacadas", items)), items, emptyList()
+                    ))
+                }
+                items
+            }
             val popularDeferred = async { safeCall { AllCalidadScraper.getPopularMovies() } }
             val latestDeferred = async { safeCall { AllCalidadScraper.getMovies(1) } }
             val seriesDeferred = async { safeCall { AllCalidadScraper.getTvShows(1) } }
@@ -56,7 +64,7 @@ class HomeRepository {
 
             val pelispediaItems = pelispediaDeferred.await()
 
-            val featuredItems = mapItems(featured, 10)
+            val featuredItems = featured
             val popularItems = mapItems(popular, 16)
             val latestItems = mapItems(latest, 16)
             val seriesItems = mapItems(series, 16)

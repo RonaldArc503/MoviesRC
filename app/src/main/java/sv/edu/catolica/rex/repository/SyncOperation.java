@@ -14,6 +14,7 @@ public class SyncOperation {
     public static final String TYPE_SAVE_PERSONAL_LIST = "save_list";
     public static final String TYPE_DELETE_PERSONAL_LIST = "delete_list";
 
+    private String id = java.util.UUID.randomUUID().toString();
     private String type;
     private String payloadJson;
     private long timestamp;
@@ -23,11 +24,15 @@ public class SyncOperation {
     }
 
     public SyncOperation(String type, Object payload) {
+        this.id = java.util.UUID.randomUUID().toString();
         this.type = type;
         this.payloadJson = new Gson().toJson(payload);
         this.timestamp = System.currentTimeMillis();
         this.retries = 0;
     }
+
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
 
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
@@ -42,4 +47,22 @@ public class SyncOperation {
     public void setRetries(int retries) { this.retries = retries; }
 
     public void incrementRetries() { this.retries++; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        SyncOperation that = (SyncOperation) o;
+        if (id != null && that.id != null) {
+            return id.equals(that.id);
+        }
+        return timestamp == that.timestamp
+                && java.util.Objects.equals(type, that.type)
+                && java.util.Objects.equals(payloadJson, that.payloadJson);
+    }
+
+    @Override
+    public int hashCode() {
+        return id != null ? id.hashCode() : java.util.Objects.hash(type, payloadJson, timestamp);
+    }
 }

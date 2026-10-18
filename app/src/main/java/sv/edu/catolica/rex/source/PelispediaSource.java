@@ -31,7 +31,8 @@ public class PelispediaSource implements ContentSource {
     @Override
     public SmartPlaybackResult resolveMovie(MediaItem item) throws Exception {
         if (item == null) return new SmartPlaybackResult();
-        if (item.getDetailUrl() == null || item.getDetailUrl().trim().isEmpty()) {
+        String detailUrl = item.getDetailUrl();
+        if (detailUrl == null || !detailUrl.toLowerCase().contains("pelispedia")) {
             String q = item.getTitulo();
             if (q == null || q.trim().isEmpty()) return new SmartPlaybackResult();
             List<MediaItem> results = scraper.search(q, 5);
@@ -45,7 +46,8 @@ public class PelispediaSource implements ContentSource {
     @Override
     public SmartPlaybackResult resolveEpisode(MediaItem item, int season, int episode) throws Exception {
         if (item == null) return new SmartPlaybackResult();
-        if (item.getDetailUrl() == null || item.getDetailUrl().trim().isEmpty()) {
+        String detailUrl = item.getDetailUrl();
+        if (detailUrl == null || !detailUrl.toLowerCase().contains("pelispedia")) {
             String q = item.getTitulo();
             if (q == null || q.trim().isEmpty()) return new SmartPlaybackResult();
             List<MediaItem> results = scraper.search(q, 5);

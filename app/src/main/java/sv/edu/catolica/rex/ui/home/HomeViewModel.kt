@@ -12,6 +12,9 @@ import sv.edu.catolica.rex.repository.HomeRepository
 
 sealed class HomeUiState {
     object Loading : HomeUiState()
+    data class Partial(
+        val sections: List<Section>
+    ) : HomeUiState()
     data class Success(
         val sections: List<Section>,
         val heroCandidates: List<MediaItem>
@@ -42,7 +45,9 @@ class HomeViewModel(
 
         viewModelScope.launch {
             try {
-                val result = repository.fetchHomeData()
+                val result = repository.fetchHomeData { initial ->
+                    _uiState.postValue(HomeUiState.Partial(initial.sections))
+                }
                 currentData = result
                 _uiState.value = HomeUiState.Success(result.sections, result.heroCandidates)
 

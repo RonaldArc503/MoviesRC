@@ -1,5 +1,6 @@
 package sv.edu.catolica.rex.source;
 
+import java.text.Normalizer;
 import java.util.Locale;
 import sv.edu.catolica.rex.models.MediaItem;
 
@@ -8,7 +9,8 @@ public final class SourceMatcher {
 
     public static String normalize(String value) {
         if (value == null) return "";
-        String out = value.trim().toLowerCase(Locale.ROOT);
+        String out = Normalizer.normalize(value.trim().toLowerCase(Locale.ROOT), Normalizer.Form.NFD);
+        out = out.replaceAll("\\p{M}", "");
         out = out.replaceAll("[^a-z0-9\\s]+", " ");
         out = out.replaceAll("\\s+", " ").trim();
         return out;
@@ -32,10 +34,18 @@ public final class SourceMatcher {
         String b = normalize(right);
         if (a.isEmpty() || b.isEmpty()) return 0;
         if (a.equals(b)) return 100;
-        if (a.contains(b) || b.contains(a)) return 85;
+
+        int minLen = Math.min(a.length(), b.length());
+        int maxLen = Math.max(a.length(), b.length());
+
+        int substringScore = 0;
+        if (a.contains(b) || b.contains(a)) {
+            substringScore = (minLen * 90) / Math.max(1, maxLen);
+        }
+
         int distance = levenshtein(a, b);
-        int max = Math.max(a.length(), b.length());
-        return Math.max(0, 100 - ((distance * 100) / Math.max(1, max)));
+        int levScore = Math.max(0, 100 - ((distance * 100) / Math.max(1, maxLen)));
+        return Math.max(substringScore, levScore);
     }
 
     private static int levenshtein(String a, String b) {

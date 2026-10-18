@@ -42,15 +42,19 @@ import sv.edu.catolica.rex.network.smart.SmartScraperEngine;
 import sv.edu.catolica.rex.models.FavoriteItem;
 import sv.edu.catolica.rex.repository.UserDataManager;
 import sv.edu.catolica.rex.storage.ContinueWatchingStore;
+import sv.edu.catolica.rex.source.UnifiedSearchService;
 import sv.edu.catolica.rex.ui.auth.AuthManager;
 import sv.edu.catolica.rex.ui.auth.LoginActivity;
-import sv.edu.catolica.rex.ui.football.FootballActivity;
+import sv.edu.catolica.rex.ui.novelas.NovelasActivity;
 import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
 import sv.edu.catolica.rex.ui.player.PlayerContenidoActivity;
 
 public class HomeActivity extends AppCompatActivity {
 
     private static final long HOME_CACHE_TTL_MS = 7 * 60 * 1000L;
+    private static final String PREF_HOME_CACHE = "home_sections_cache";
+    private static final String KEY_SECTIONS_JSON = "cached_sections_json";
+    private static final String KEY_CACHE_TIMESTAMP = "cached_sections_time";
     private static List<Section> homeSectionsCache;
     private static long homeCacheSavedAtMs;
 
@@ -76,8 +80,7 @@ public class HomeActivity extends AppCompatActivity {
     private View menuHome;
     private View menuBuscar;
     private View menuCanales;
-    private View menuFootball;
-    private View menuCategorias;
+    private View menuNovelas;
     private View menuSeries;
     private View menuDoramas;
     private View menuAjustes;
@@ -92,8 +95,12 @@ public class HomeActivity extends AppCompatActivity {
     private int lastHomeFirstVisiblePos = 0;
     private int lastHomeTopOffset = 0;
     private boolean pendingTvFocusRestore = false;
+    private boolean showingPartialHome = false;
+    private androidx.core.widget.NestedScrollView tvNestedScroll;
     private final Map<String, ContinueWatchingItem> continueWatchingByContentId = new LinkedHashMap<>();
+    private final ExecutorService prefetchExecutor = Executors.newSingleThreadExecutor();
     private HomeViewModel viewModel;
+    private UserDataManager.DataChangeListener userDataListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -101,9 +108,14 @@ public class HomeActivity extends AppCompatActivity {
         setContentView(R.layout.activity_home);
 
         sv.edu.catolica.rex.ui.player.PlaybackCacheHelper.initCacheAsync(this);
+        sv.edu.catolica.rex.utils.AppCacheManager.autoPruneOnStartup(this);
         getWindow().getDecorView().postDelayed(this::warmUpWebView, 3000L);
 
         isTv = isTvDevice();
+
+        if (isTv) {
+            tvNestedScroll = findViewById(R.id.tv_nested_scroll);
+        }
 
         rvSections  = findViewById(R.id.rv_home_sections);
         progressBar = findViewById(R.id.progressBar);
@@ -113,16 +125,16 @@ public class HomeActivity extends AppCompatActivity {
         rvSections.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
-                // El carrusel se desplaza exactamente con el scroll del listado:
-                // forma un solo bloque con el contenido (nada de overlay fijo).
-                if (isTv || heroContainer == null) return;
-                int offset = recyclerView.computeVerticalScrollOffset();
-                heroContainer.setTranslationY(Math.min(0f, -offset));
+                // En móvil el carrusel se desplaza con translationY para integrarse.
+                // En TV, el desplazamiento continuo lo maneja tvNestedScroll directamente.
+                if (!isTv && heroContainer != null) {
+                    int offset = recyclerView.computeVerticalScrollOffset();
+                    heroContainer.setTranslationY(Math.min(0f, -offset));
+                }
             }
         });
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
-        rvSections.setHasFixedSize(true);
         rvSections.setItemAnimator(null);
         rvSections.setItemViewCacheSize(isTv ? 8 : 4);
         adapter = new HomeAdapter(this, new ArrayList<>(),
@@ -171,6 +183,27 @@ public class HomeActivity extends AppCompatActivity {
         setupViewModelObservers();
         loadHomeData(false);
 
+        userDataListener = new UserDataManager.DataChangeListener() {
+            @Override
+            public void onFavoritesChanged(List<FavoriteItem> favorites) {
+                runOnUiThread(() -> {
+                    refreshUserDataSections();
+                    if (heroPager != null && heroPager.getAdapter() != null) {
+                        heroPager.getAdapter().notifyItemChanged(heroPager.getCurrentItem());
+                    }
+                });
+            }
+
+            @Override
+            public void onHistoryChanged(List<sv.edu.catolica.rex.models.WatchedHistoryItem> history) {
+            }
+
+            @Override
+            public void onSettingsChanged(sv.edu.catolica.rex.models.UserSettings settings) {
+            }
+        };
+        UserDataManager.getInstance(this).addDataChangeListener(userDataListener);
+
         if (AuthManager.getInstance().isSignedIn()) {
             UserDataManager.getInstance(this).restoreFromFirestore(new UserDataManager.RestoreCallback() {
                 @Override
@@ -187,8 +220,7 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private boolean isTvDevice() {
-        UiModeManager mgr = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
-        return mgr != null && mgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
+        return sv.edu.catolica.rex.utils.TvUtils.isTv(this);
     }
 
     private android.webkit.WebView webViewWarmup;
@@ -256,20 +288,45 @@ public class HomeActivity extends AppCompatActivity {
         menuHome = findViewById(R.id.menu_home);
         menuBuscar = findViewById(R.id.menu_buscar);
         menuCanales = findViewById(R.id.menu_canales);
-        menuFootball = findViewById(R.id.menu_football);
-        menuCategorias = findViewById(R.id.menu_categorias);
+        menuNovelas = findViewById(R.id.menu_novelas);
         menuSeries = findViewById(R.id.menu_series);
         menuDoramas = findViewById(R.id.menu_doramas);
         menuAjustes = findViewById(R.id.menu_ajustes);
 
         if (menuHome == null || menuBuscar == null || menuCanales == null
-                || menuFootball == null || menuCategorias == null) {
+                || menuNovelas == null) {
             return;
         }
 
         if (menuSeries != null) menuSeries.setVisibility(View.VISIBLE);
         if (menuDoramas != null) menuDoramas.setVisibility(View.VISIBLE);
         if (menuAjustes != null) menuAjustes.setVisibility(View.VISIBLE);
+
+        View.OnKeyListener menuRightListener = (v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (heroContainer != null && heroContainer.getVisibility() == View.VISIBLE && lastFocusedSectionPos == -1) {
+                    return focusHeroPlayButton();
+                } else if (adapter != null && adapter.getItemCount() > 0) {
+                    int sec = Math.max(0, adapter.getLastFocusedSection());
+                    int it = Math.max(0, adapter.getLastFocusedItem());
+                    scrollTvToSection(sec);
+                    adapter.requestFocusAt(sec, it);
+                    return true;
+                } else if (heroContainer != null && heroContainer.getVisibility() == View.VISIBLE) {
+                    return focusHeroPlayButton();
+                }
+            }
+            return false;
+        };
+
+        menuHome.setOnKeyListener(menuRightListener);
+        menuBuscar.setOnKeyListener(menuRightListener);
+        menuCanales.setOnKeyListener(menuRightListener);
+        menuNovelas.setOnKeyListener(menuRightListener);
+        if (menuSeries != null) menuSeries.setOnKeyListener(menuRightListener);
+        if (menuDoramas != null) menuDoramas.setOnKeyListener(menuRightListener);
+        if (menuAjustes != null) menuAjustes.setOnKeyListener(menuRightListener);
 
         menuHome.setOnClickListener(v -> {
             setTvMenuSelected(menuHome);
@@ -294,13 +351,9 @@ public class HomeActivity extends AppCompatActivity {
             startActivity(new Intent(HomeActivity.this, TvChannelsActivity.class));
         });
 
-        menuFootball.setOnClickListener(v -> {
-            setTvMenuSelected(menuFootball);
-            startActivity(new Intent(HomeActivity.this, FootballActivity.class));
-        });
-
-        menuCategorias.setOnClickListener(v -> {
-            handleTvMenuPlaceholder(menuCategorias);
+        menuNovelas.setOnClickListener(v -> {
+            setTvMenuSelected(menuNovelas);
+            startActivity(new Intent(HomeActivity.this, NovelasActivity.class));
         });
 
         menuSeries.setOnClickListener(v -> {
@@ -308,7 +361,8 @@ public class HomeActivity extends AppCompatActivity {
         });
 
         menuDoramas.setOnClickListener(v -> {
-            handleTvMenuPlaceholder(menuDoramas);
+            setTvMenuSelected(menuDoramas);
+            startActivity(new Intent(HomeActivity.this, sv.edu.catolica.rex.ui.doramas.DoramasActivity.class));
         });
 
         if (menuAjustes != null) {
@@ -319,7 +373,7 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void setTvMenuSelected(View selectedItem) {
-        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuFootball, menuCategorias};
+        View[] items = new View[]{menuHome, menuBuscar, menuCanales, menuNovelas, menuSeries, menuDoramas};
         for (View item : items) {
             if (item == null) {
                 continue;
@@ -363,9 +417,13 @@ public class HomeActivity extends AppCompatActivity {
         String email = user != null ? user.getEmail() : null;
         String title = user != null && name != null && !name.isEmpty() ? name : "Ajustes";
 
+        long cacheBytes = sv.edu.catolica.rex.utils.AppCacheManager.getCacheSizeBytes(this);
+        String cacheStr = sv.edu.catolica.rex.utils.AppCacheManager.formatSize(cacheBytes);
+
         List<String> items = new ArrayList<>();
         items.add(user != null && email != null ? email : "No autenticado");
         items.add("Cambiar contraseña");
+        items.add("Limpiar caché (" + cacheStr + ")");
         items.add("Cerrar sesión");
 
         new androidx.appcompat.app.AlertDialog.Builder(this)
@@ -390,6 +448,11 @@ public class HomeActivity extends AppCompatActivity {
                             });
                         }
                     } else if (which == 2) {
+                        Toast.makeText(this, "Limpiando caché...", Toast.LENGTH_SHORT).show();
+                        sv.edu.catolica.rex.utils.AppCacheManager.cleanCache(this, (bytesFreed, formatted) -> {
+                            Toast.makeText(HomeActivity.this, "Caché liberada: " + formatted, Toast.LENGTH_SHORT).show();
+                        });
+                    } else if (which == 3) {
                         UserDataManager.reset(this);
                         AuthManager.getInstance().logout();
                         Intent intent = new Intent(this, LoginActivity.class);
@@ -406,13 +469,21 @@ public class HomeActivity extends AppCompatActivity {
         menuHome = findViewById(R.id.menu_home);
         menuBuscar = findViewById(R.id.menu_buscar);
         menuCanales = findViewById(R.id.menu_canales);
-        menuFootball = findViewById(R.id.menu_football);
-        menuCategorias = findViewById(R.id.menu_categorias);
+        menuNovelas = findViewById(R.id.menu_novelas);
+        menuDoramas = findViewById(R.id.menu_doramas);
         menuAjustes = findViewById(R.id.menu_ajustes);
 
         if (menuHome == null || menuBuscar == null || menuCanales == null
-                || menuFootball == null || menuCategorias == null) {
+                || menuNovelas == null) {
             return;
+        }
+
+        if (menuDoramas != null) {
+            menuDoramas.setVisibility(View.VISIBLE);
+            menuDoramas.setOnClickListener(v -> {
+                setTvMenuSelected(menuDoramas);
+                startActivity(new Intent(HomeActivity.this, sv.edu.catolica.rex.ui.doramas.DoramasActivity.class));
+            });
         }
 
         if (menuAjustes != null) {
@@ -437,15 +508,9 @@ public class HomeActivity extends AppCompatActivity {
             startActivity(new Intent(HomeActivity.this, TvChannelsActivity.class));
         });
 
-        menuFootball.setOnClickListener(v -> {
-            setTvMenuSelected(menuFootball);
-            startActivity(new Intent(HomeActivity.this, FootballActivity.class));
-        });
-
-        menuCategorias.setOnClickListener(v -> {
-            setTvMenuSelected(menuCategorias);
-            List<Section> source = homeSectionsSnapshot.isEmpty() ? getCachedHomeSectionsIfFresh() : homeSectionsSnapshot;
-            showSections(buildCategorySections(copySections(source)));
+        menuNovelas.setOnClickListener(v -> {
+            setTvMenuSelected(menuNovelas);
+            startActivity(new Intent(HomeActivity.this, NovelasActivity.class));
         });
 
         setTvMenuSelected(menuHome);
@@ -489,67 +554,111 @@ public class HomeActivity extends AppCompatActivity {
     private void openContinueWatchingPlayer(MediaItem item, ContinueWatchingItem continueItem) {
         captureHomeNavigationState();
         pendingTvFocusRestore = isTv;
-        progressBar.setVisibility(ProgressBar.VISIBLE);
 
-        new Thread(() -> {
-            try {
-                MediaItem playbackItem = buildContinuePlaybackItem(item, continueItem);
-                SmartScraperEngine resolver = new SmartScraperEngine();
-                List<String> urls = isSeriesContinueItem(continueItem)
-                        ? resolver.resolveEpisodeUrls(
-                                HomeActivity.this,
-                                playbackItem,
-                                continueItem.getSeasonNumber(),
-                                continueItem.getEpisodeNumber(),
-                                continueItem.getEpisodeId())
-                        : resolver.resolveMovieUrls(HomeActivity.this, playbackItem);
+        MediaItem playbackItem = buildContinuePlaybackItem(item, continueItem);
+        boolean isNovela = (continueItem.getSource() != null && continueItem.getSource().equalsIgnoreCase("novelas"))
+                || (continueItem.getDetailUrl() != null && continueItem.getDetailUrl().contains("canela.tv"))
+                || (item != null && item.getFuente() != null && item.getFuente().contains("novelas"));
 
-                if ((urls == null || urls.isEmpty()) && continueItem.getEpisodeId() > 0) {
-                    AllCalidadScraper.hit(continueItem.getEpisodeId(), "episodes");
-                    urls = AllCalidadScraper.getPlayableUrls(
-                            AllCalidadScraper.getPlayer(continueItem.getEpisodeId()));
-                }
-                if ((urls == null || urls.isEmpty()) && continueItem.getPostId() > 0) {
-                    AllCalidadScraper.hit(continueItem.getPostId(), continueItem.getMediaType());
-                    urls = AllCalidadScraper.getPlayableUrls(
-                            AllCalidadScraper.getPlayer(continueItem.getPostId()));
-                }
-
-                final List<String> finalUrls = urls;
-                runOnUiThread(() -> {
-                    progressBar.setVisibility(ProgressBar.GONE);
-                    if (finalUrls == null || finalUrls.isEmpty()) {
-                        Toast.makeText(HomeActivity.this,
-                                "No hay servidores disponibles para continuar",
-                                Toast.LENGTH_SHORT).show();
-                        return;
+        if (isNovela) {
+            new Thread(() -> {
+                List<String> resolved = new ArrayList<>();
+                try {
+                    sv.edu.catolica.rex.network.smart.CanelaScraper scraper =
+                            new sv.edu.catolica.rex.network.smart.CanelaScraper();
+                    boolean isSeries = ContinueWatchingStore.isSeries(continueItem);
+                    sv.edu.catolica.rex.network.smart.SmartPlaybackResult res = isSeries
+                            ? scraper.resolveEpisode(
+                                    playbackItem,
+                                    continueItem.getSeasonNumber(),
+                                    continueItem.getEpisodeNumber(),
+                                    continueItem.getEpisodeId()
+                            )
+                            : scraper.resolveMovie(playbackItem);
+                    if (res != null && res.hasPlayableUrls()) {
+                        resolved = res.toPlayableUrls();
                     }
-                    startContinueWatchingPlayer(playbackItem, continueItem, new ArrayList<>(finalUrls));
-                });
-            } catch (Exception e) {
+                } catch (Exception ignored) {}
+                final ArrayList<String> urlsToPass = new ArrayList<>(resolved);
                 runOnUiThread(() -> {
-                    progressBar.setVisibility(ProgressBar.GONE);
-                    Toast.makeText(HomeActivity.this,
-                            "Error al continuar reproduccion",
-                            Toast.LENGTH_SHORT).show();
+                    if (isFinishing() || isDestroyed()) return;
+                    startContinueWatchingPlayer(playbackItem, continueItem, urlsToPass);
                 });
-            }
-        }).start();
+            }).start();
+            return;
+        }
+
+        SmartScraperEngine resolver = new SmartScraperEngine();
+        List<String> cachedUrls = resolver.getCachedUrls(
+                this,
+                playbackItem,
+                continueItem.getSeasonNumber(),
+                continueItem.getEpisodeNumber()
+        );
+
+        ArrayList<String> urlsToPass = (cachedUrls != null && !cachedUrls.isEmpty())
+                ? new ArrayList<>(cachedUrls) : new ArrayList<>();
+
+        startContinueWatchingPlayer(playbackItem, continueItem, urlsToPass);
     }
 
     private MediaItem buildContinuePlaybackItem(MediaItem item, ContinueWatchingItem continueItem) {
         String title = continueItem.getSeriesTitle() != null && !continueItem.getSeriesTitle().isEmpty()
                 ? continueItem.getSeriesTitle()
                 : item.getTitulo();
+        String detailUrl = continueItem.getDetailUrl() != null && !continueItem.getDetailUrl().isEmpty()
+                ? continueItem.getDetailUrl()
+                : item.getDetailUrl();
         MediaItem playbackItem = new MediaItem(title, item.getAnio(),
-                item.getImagen(), item.getDetailUrl(), 0);
-        playbackItem.setFuente(item.getFuente());
+                item.getImagen(), detailUrl, 0);
+        String source = continueItem.getSource() != null && !continueItem.getSource().isEmpty()
+                ? continueItem.getSource()
+                : item.getFuente();
+        playbackItem.setFuente(source);
         playbackItem.setMediaType(continueItem.getMediaType());
         playbackItem.setPostId(continueItem.getPostId());
         playbackItem.setTmdbId(continueItem.getTmdbId());
         playbackItem.setImdbId(item.getImdbId());
         playbackItem.setSynopsis(item.getSynopsis());
         return playbackItem;
+    }
+
+    private MediaItem buildContinuePlaybackItem(ContinueWatchingItem continueItem) {
+        if (continueItem == null) return null;
+        String title = continueItem.getSeriesTitle() != null && !continueItem.getSeriesTitle().isEmpty()
+                ? continueItem.getSeriesTitle()
+                : (continueItem.getTitle() != null ? continueItem.getTitle() : "");
+        String detailUrl = continueItem.getDetailUrl() != null ? continueItem.getDetailUrl() : "";
+        MediaItem playbackItem = new MediaItem(title, "", continueItem.getImageUrl(), detailUrl, continueItem.getPostId());
+        playbackItem.setFuente(continueItem.getSource());
+        playbackItem.setMediaType(continueItem.getMediaType());
+        playbackItem.setPostId(continueItem.getPostId());
+        playbackItem.setTmdbId(continueItem.getTmdbId());
+        return playbackItem;
+    }
+
+    private void prefetchContinueWatching(List<ContinueWatchingItem> items) {
+        if (items == null || items.isEmpty()) return;
+        final List<ContinueWatchingItem> snapshot = new ArrayList<>(items);
+        prefetchExecutor.execute(() -> {
+            for (int i = 0; i < Math.min(3, snapshot.size()); i++) {
+                ContinueWatchingItem cw = snapshot.get(i);
+                if (cw == null) continue;
+                try {
+                    MediaItem mi = buildContinuePlaybackItem(cw);
+                    if (mi == null) continue;
+                    SmartScraperEngine resolver = new SmartScraperEngine();
+                    if (resolver.getCachedUrls(HomeActivity.this, mi, cw.getSeasonNumber(), cw.getEpisodeNumber()) == null) {
+                        if (isSeriesContinueItem(cw)) {
+                            resolver.resolveEpisodeUrls(HomeActivity.this, mi, cw.getSeasonNumber(), cw.getEpisodeNumber(), cw.getEpisodeId());
+                        } else {
+                            resolver.resolveMovieUrls(HomeActivity.this, mi);
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
     }
 
     private void startContinueWatchingPlayer(
@@ -564,11 +673,12 @@ public class HomeActivity extends AppCompatActivity {
                 ? continueItem.getSeriesTitle()
                 : item.getTitulo();
 
+        ArrayList<String> safeUrls = urls != null ? urls : new ArrayList<>();
         Intent intent;
         if (isSeriesContinueItem(continueItem)) {
             intent = PlayerContenidoActivity.createEpisodeIntent(
                     this,
-                    urls,
+                    safeUrls,
                     title,
                     seriesTitle,
                     continueItem.getPostId(),
@@ -578,7 +688,7 @@ public class HomeActivity extends AppCompatActivity {
                     continueItem.getEpisodeNumber()
             );
         } else {
-            intent = PlayerContenidoActivity.createIntent(this, urls, title);
+            intent = PlayerContenidoActivity.createIntent(this, safeUrls, title);
         }
 
         intent.putExtra("resume_position_ms", continueItem.getPositionMs());
@@ -590,6 +700,14 @@ public class HomeActivity extends AppCompatActivity {
         intent.putExtra("series_post_id", continueItem.getPostId());
         intent.putExtra("series_title", seriesTitle);
         intent.putExtra("series_post_type", continueItem.getMediaType());
+        if (continueItem.getSource() != null && !continueItem.getSource().isEmpty()) {
+            intent.putExtra("series_source", continueItem.getSource());
+            intent.putExtra("exo_series_source", continueItem.getSource());
+        }
+        if (continueItem.getDetailUrl() != null && !continueItem.getDetailUrl().isEmpty()) {
+            intent.putExtra("series_detail_url", continueItem.getDetailUrl());
+            intent.putExtra("exo_series_detail_url", continueItem.getDetailUrl());
+        }
         if (continueItem.getImageUrl() != null && !continueItem.getImageUrl().isEmpty()) {
             intent.putExtra("image_url", continueItem.getImageUrl());
             intent.putExtra("exo_image_url", continueItem.getImageUrl());
@@ -602,11 +720,28 @@ public class HomeActivity extends AppCompatActivity {
         if (item == null) {
             return false;
         }
+        if (item.getEpisodeId() > 0 || item.getSeasonNumber() > 0 || item.getEpisodeNumber() > 0) {
+            return true;
+        }
         String type = item.getMediaType() == null ? "" : item.getMediaType().toLowerCase(Locale.ROOT);
-        return item.getEpisodeId() > 0
-                || type.contains("tv")
+        return type.contains("tv")
                 || type.contains("series")
-                || type.contains("dorama");
+                || type.contains("dorama")
+                || type.contains("anime");
+    }
+
+    private boolean isSameSeriesContinueItem(ContinueWatchingItem a, ContinueWatchingItem b) {
+        if (a == null || b == null) return false;
+        if (a.getPostId() > 0 && b.getPostId() > 0 && a.getPostId() == b.getPostId()) {
+            return true;
+        }
+        String titleA = a.getSeriesTitle() != null && !a.getSeriesTitle().trim().isEmpty()
+                ? a.getSeriesTitle().trim().toLowerCase(Locale.ROOT)
+                : (a.getTitle() != null ? a.getTitle().replaceAll("(?i)\\s*-\\s*(?:T|S)\\d+.*", "").trim().toLowerCase(Locale.ROOT) : "");
+        String titleB = b.getSeriesTitle() != null && !b.getSeriesTitle().trim().isEmpty()
+                ? b.getSeriesTitle().trim().toLowerCase(Locale.ROOT)
+                : (b.getTitle() != null ? b.getTitle().replaceAll("(?i)\\s*-\\s*(?:T|S)\\d+.*", "").trim().toLowerCase(Locale.ROOT) : "");
+        return !titleA.isEmpty() && !titleB.isEmpty() && titleA.equalsIgnoreCase(titleB);
     }
 
     private void loadHomeData() { loadHomeData(false); }
@@ -616,11 +751,28 @@ public class HomeActivity extends AppCompatActivity {
 
         if (cached != null && !cached.isEmpty()) {
             progressBar.setVisibility(ProgressBar.GONE);
+            cached.removeIf(s -> "Continuar Viendo".equals(s.getTitle())
+                    || "❤️ Mis Favoritos".equals(s.getTitle())
+                    || "🕐 Historial".equals(s.getTitle()));
+            addUserDataSections(cached);
+            Section freshCw = buildContinueWatchingSection();
+            if (freshCw != null) {
+                cached.add(0, freshCw);
+            }
             homeSectionsSnapshot = copySections(cached);
             showSections(cached);
             setupHeroCarousel(extractHeroItems(cached));
             if (hasTmdbHomeSections(cached)) {
                 return;
+            }
+        } else {
+            // Mostrar inmediatamente los datos locales sin esperar respuesta de red
+            Section initialCw = buildContinueWatchingSection();
+            if (initialCw != null) {
+                List<Section> initialList = new ArrayList<>();
+                initialList.add(initialCw);
+                homeSectionsSnapshot = copySections(initialList);
+                showSections(initialList);
             }
         }
 
@@ -634,9 +786,25 @@ public class HomeActivity extends AppCompatActivity {
     private void setupViewModelObservers() {
         viewModel.getUiState().observe(this, state -> {
             if (state instanceof HomeUiState.Loading) {
-                progressBar.setVisibility(ProgressBar.VISIBLE);
+                if (homeSectionsSnapshot.isEmpty()) {
+                    progressBar.setVisibility(ProgressBar.VISIBLE);
+                }
+            } else if (state instanceof HomeUiState.Partial) {
+                if (isSearchMode || homeSectionsSnapshot.size() > 1) return;
+                List<Section> sections = new ArrayList<>(((HomeUiState.Partial) state).getSections());
+                addUserDataSections(sections);
+                Section continueSection = buildContinueWatchingSection();
+                if (continueSection != null) sections.add(0, continueSection);
+                homeSectionsSnapshot = copySections(sections);
+                showSections(sections);
+                showingPartialHome = true;
+                progressBar.setVisibility(ProgressBar.GONE);
             } else if (state instanceof HomeUiState.Success) {
                 if (isSearchMode) return;
+                if (showingPartialHome && isTv && rvSections.hasFocus()) {
+                    pendingTvFocusRestore = true;
+                }
+                showingPartialHome = false;
                 HomeUiState.Success success = (HomeUiState.Success) state;
                 List<Section> sections = new ArrayList<>(success.getSections());
 
@@ -675,9 +843,30 @@ public class HomeActivity extends AppCompatActivity {
 
         List<ContinueWatchingItem> active = new ArrayList<>();
         for (ContinueWatchingItem item : items) {
-            if (!item.isCompleted() && item.getPositionMs() > 0) {
-                active.add(item);
+            if (item == null) continue;
+            boolean isCompleted = ContinueWatchingStore.isCompleted(item);
+            if (isCompleted) {
+                continue;
             }
+            if (!isSeriesContinueItem(item) && item.getPositionMs() <= 0 && item.getProgressPercent() <= 0) {
+                continue;
+            }
+
+            // Si es una serie, solo permitimos un único seguimiento (el último)
+            if (isSeriesContinueItem(item)) {
+                boolean duplicate = false;
+                for (ContinueWatchingItem kept : active) {
+                    if (isSameSeriesContinueItem(kept, item)) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) {
+                    continue;
+                }
+            }
+
+            active.add(item);
         }
         if (active.isEmpty()) return null;
 
@@ -685,6 +874,10 @@ public class HomeActivity extends AppCompatActivity {
         for (ContinueWatchingItem cw : active) {
             String cleanTitle = cw.getSeriesTitle() != null && !cw.getSeriesTitle().isEmpty()
                     ? cw.getSeriesTitle() : cw.getTitle();
+            if (cleanTitle != null) {
+                cleanTitle = cleanTitle.replaceAll("(?i)\\s*-\\s*(?:T|S)\\d+.*", "")
+                        .replaceAll("(?i)\\s*(?:T|S)\\d+[:E\\s].*", "").trim();
+            }
             MediaItem mi = new MediaItem(cleanTitle, "", cw.getImageUrl(), cw.getDetailUrl(), cw.getPostId());
             mi.setMediaType(cw.getMediaType());
             mi.setProgress(Math.min(99, cw.getProgressPercent()));
@@ -698,11 +891,11 @@ public class HomeActivity extends AppCompatActivity {
                 mi.setImagen(cw.getImageUrl());
             }
 
-            // Retroalimentación visual precisa (Episodio y/o tiempo restante)
+            // Retroalimentación visual precisa estilo Netflix (T1 Episodio 1 • tiempo restante)
             StringBuilder feedback = new StringBuilder();
             if (isSeriesContinueItem(cw) && cw.getEpisodeNumber() > 0) {
                 int sNum = cw.getSeasonNumber() > 0 ? cw.getSeasonNumber() : 1;
-                feedback.append("T").append(sNum).append(":E").append(cw.getEpisodeNumber());
+                feedback.append("T").append(sNum).append(" Episodio ").append(cw.getEpisodeNumber());
             }
             if (cw.getDurationMs() > cw.getPositionMs() && cw.getPositionMs() > 0) {
                 long remainingMin = (cw.getDurationMs() - cw.getPositionMs()) / 60000L;
@@ -728,30 +921,55 @@ public class HomeActivity extends AppCompatActivity {
             mediaItems.add(mi);
         }
 
+        prefetchContinueWatching(active);
         return mediaItems.isEmpty() ? null : new Section("Continuar Viendo", mediaItems);
     }
 
     private void addUserDataSections(List<Section> sections) {
         UserDataManager udm = UserDataManager.getInstance(this);
-        if (!udm.isRestoreComplete()) return;
+
 
         List<FavoriteItem> favorites = udm.getFavorites();
         if (favorites != null && !favorites.isEmpty()) {
             List<MediaItem> favItems = new ArrayList<>();
             for (FavoriteItem f : favorites) {
-                MediaItem mi = new MediaItem(f.getTitle(), "", f.getImageUrl(), "", 0);
+                MediaItem mi = new MediaItem(
+                        f.getTitle(),
+                        f.getAnio() != null ? f.getAnio() : "",
+                        f.getImageUrl(),
+                        f.getDetailUrl() != null ? f.getDetailUrl() : "",
+                        f.getPostId() > 0 ? f.getPostId() : parsePostId(f.getContentId()),
+                        true
+                );
                 mi.setMediaType(f.getMediaType());
-                mi.setPostId(parsePostId(f.getContentId()));
+                mi.setBackdrop(f.getBackdrop() != null ? f.getBackdrop() : f.getImageUrl());
+                mi.setFuente(f.getFuente());
+                mi.setRating(f.getRating());
+                mi.setTmdbId(f.getTmdbId());
+                mi.setSynopsis(f.getSynopsis());
                 favItems.add(mi);
             }
             sections.add(0, new Section("❤️ Mis Favoritos", favItems));
         }
     }
 
-    private void refreshUserDataSections() {
-        if (homeSectionsSnapshot.isEmpty()) return;
+    public void refreshUserDataSections() {
+        if (homeSectionsSnapshot.isEmpty()) {
+            List<Section> initial = new ArrayList<>();
+            addUserDataSections(initial);
+            Section continueSection = buildContinueWatchingSection();
+            if (continueSection != null) {
+                initial.add(0, continueSection);
+            }
+            if (!initial.isEmpty()) {
+                homeSectionsSnapshot = copySections(initial);
+                showSections(initial);
+            }
+            return;
+        }
         List<Section> updated = copySections(homeSectionsSnapshot);
         updated.removeIf(s -> "❤️ Mis Favoritos".equals(s.getTitle())
+                || "❤️ Mi Lista".equals(s.getTitle())
                 || "🕐 Historial".equals(s.getTitle())
                 || "Continuar Viendo".equals(s.getTitle()));
         addUserDataSections(updated);
@@ -829,29 +1047,39 @@ public class HomeActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                List<AllCalidadScraper.ContentItem> results = AllCalidadScraper.search(safeQuery, 1);
-                List<MediaItem> mapped = mapItems(results, 40);
-                List<MediaItem> tmdbMapped = TmdbService.searchMedia(safeQuery, 40);
-                List<MediaItem> merged = mergeSearchResults(mapped, tmdbMapped, 60);
-
-                List<MediaItem> movies = new ArrayList<>(), series = new ArrayList<>();
-                for (MediaItem item : merged) {
-                    String type = item.getMediaType() == null ? "" :
-                            item.getMediaType().toLowerCase(Locale.ROOT);
-                    if ("tvshows".equals(type) || "animes".equals(type)) series.add(item);
-                    else movies.add(item);
-                }
+                UnifiedSearchService searchService = UnifiedSearchService.getInstance();
+                UnifiedSearchService.SearchResult searchResult = searchService.searchUnified(safeQuery, 30);
 
                 List<Section> sections = new ArrayList<>();
-                if (!movies.isEmpty())  sections.add(new Section("🎬 Películas", movies));
-                if (!series.isEmpty())  sections.add(new Section("📺 Series",    series));
-                if (sections.isEmpty()) sections.add(new Section("🔎 Resultados", merged));
+                int topMovieScore = !searchResult.getMovies().isEmpty()
+                        ? UnifiedSearchService.computeQueryRelevance(safeQuery, searchResult.getMovies().get(0)) : 0;
+                int topSeriesScore = !searchResult.getSeries().isEmpty()
+                        ? UnifiedSearchService.computeQueryRelevance(safeQuery, searchResult.getSeries().get(0)) : 0;
+
+                if (topSeriesScore > topMovieScore) {
+                    if (!searchResult.getSeries().isEmpty()) {
+                        sections.add(new Section("📺 Series", searchResult.getSeries()));
+                    }
+                    if (!searchResult.getMovies().isEmpty()) {
+                        sections.add(new Section("🎬 Películas", searchResult.getMovies()));
+                    }
+                } else {
+                    if (!searchResult.getMovies().isEmpty()) {
+                        sections.add(new Section("🎬 Películas", searchResult.getMovies()));
+                    }
+                    if (!searchResult.getSeries().isEmpty()) {
+                        sections.add(new Section("📺 Series", searchResult.getSeries()));
+                    }
+                }
+                if (sections.isEmpty() && !searchResult.getAll().isEmpty()) {
+                    sections.add(new Section("🔎 Resultados", searchResult.getAll()));
+                }
 
                 runOnUiThread(() -> {
                     if (!isRequestActive(requestId) || !isSearchMode ||
                             !safeQuery.equals(lastSearchQuery)) return;
                     progressBar.setVisibility(ProgressBar.GONE);
-                    if (merged.isEmpty()) {
+                    if (searchResult.isEmpty()) {
                         showSections(new ArrayList<>());
                         Toast.makeText(HomeActivity.this,
                                 "Sin resultados para: " + safeQuery, Toast.LENGTH_SHORT).show();
@@ -863,7 +1091,7 @@ public class HomeActivity extends AppCompatActivity {
                 });
 
                 List<MediaItem> enrichCandidates = new ArrayList<>();
-                for (MediaItem item : merged) {
+                for (MediaItem item : searchResult.getAll()) {
                     if (item == null) {
                         continue;
                     }
@@ -922,6 +1150,9 @@ public class HomeActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
+        if (adapter != null && adapter.dismissOpenOverlays()) {
+            return;
+        }
         if (isTv && searchView != null) {
             CharSequence q = searchView.getQuery();
             if (isSearchMode || (q != null && q.toString().trim().length() > 0)) {
@@ -946,7 +1177,8 @@ public class HomeActivity extends AppCompatActivity {
         if (!isSearchMode) {
             refreshUserDataSections();
         }
-        if (!isTv && heroPager != null && heroPager.getAdapter() != null) {
+        if (heroPager != null && heroPager.getAdapter() != null) {
+            heroPager.getAdapter().notifyItemChanged(heroPager.getCurrentItem());
             startHeroAutoScroll(heroPager.getAdapter().getItemCount());
         }
         restoreTvFocusIfNeeded();
@@ -965,18 +1197,70 @@ public class HomeActivity extends AppCompatActivity {
         outState.putInt("home_scroll_offset", lastHomeTopOffset);
     }
 
-    private static synchronized List<Section> getCachedHomeSectionsIfFresh() {
-        if (homeSectionsCache == null || homeSectionsCache.isEmpty()) return null;
-        if (System.currentTimeMillis() - homeCacheSavedAtMs > HOME_CACHE_TTL_MS) {
-            homeSectionsCache = null; homeCacheSavedAtMs = 0; return null;
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (userDataListener != null) {
+            UserDataManager.getInstance(this).removeDataChangeListener(userDataListener);
         }
-        return copySections(homeSectionsCache);
+        try {
+            prefetchExecutor.shutdown();
+        } catch (Throwable ignored) {}
     }
 
-    private static synchronized void cacheHomeSections(List<Section> sections) {
+    private synchronized List<Section> getCachedHomeSectionsIfFresh() {
+        if (homeSectionsCache != null && !homeSectionsCache.isEmpty()) {
+            if (System.currentTimeMillis() - homeCacheSavedAtMs <= HOME_CACHE_TTL_MS) {
+                return copySections(homeSectionsCache);
+            }
+            homeSectionsCache = null;
+            homeCacheSavedAtMs = 0;
+        }
+
+        try {
+            android.content.SharedPreferences prefs =
+                    getApplicationContext().getSharedPreferences(PREF_HOME_CACHE, Context.MODE_PRIVATE);
+            long savedAt = prefs.getLong(KEY_CACHE_TIMESTAMP, 0L);
+            if (savedAt > 0 && (System.currentTimeMillis() - savedAt <= HOME_CACHE_TTL_MS)) {
+                String json = prefs.getString(KEY_SECTIONS_JSON, null);
+                if (json != null && !json.isEmpty()) {
+                    java.lang.reflect.Type type = new com.google.gson.reflect.TypeToken<List<Section>>() {}.getType();
+                    List<Section> diskSections = new com.google.gson.Gson().fromJson(json, type);
+                    if (diskSections != null && !diskSections.isEmpty()) {
+                        homeSectionsCache = copySections(diskSections);
+                        homeCacheSavedAtMs = savedAt;
+                        return copySections(diskSections);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private synchronized void cacheHomeSections(List<Section> sections) {
         if (sections == null || sections.isEmpty()) return;
         homeSectionsCache  = copySections(sections);
         homeCacheSavedAtMs = System.currentTimeMillis();
+
+        List<Section> toPersist = copySections(sections);
+        toPersist.removeIf(s -> "Continuar Viendo".equals(s.getTitle())
+                || "❤️ Mis Favoritos".equals(s.getTitle())
+                || "🕐 Historial".equals(s.getTitle()));
+        if (!toPersist.isEmpty()) {
+            final long now = homeCacheSavedAtMs;
+            Executors.newSingleThreadExecutor().execute(() -> {
+                try {
+                    String json = new com.google.gson.Gson().toJson(toPersist);
+                    getApplicationContext().getSharedPreferences(PREF_HOME_CACHE, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString(KEY_SECTIONS_JSON, json)
+                            .putLong(KEY_CACHE_TIMESTAMP, now)
+                            .apply();
+                } catch (Exception ignored) {
+                }
+            });
+        }
     }
 
     private boolean hasTmdbHomeSections(List<Section> sections) {
@@ -990,9 +1274,9 @@ public class HomeActivity extends AppCompatActivity {
                 continue;
             }
             String title = section.getTitle().trim().toLowerCase(Locale.ROOT);
-            if ("populares tmdb".equals(title)) {
+            if (title.contains("populares tmdb")) {
                 hasPopularTmdb = true;
-            } else if ("tendencias".equals(title)) {
+            } else if (title.contains("tendencias")) {
                 hasTrending = true;
             }
             if (hasPopularTmdb && hasTrending) {
@@ -1071,7 +1355,7 @@ public class HomeActivity extends AppCompatActivity {
      * para que al tocar "Reproducir" funcionen; no se quitan del carrusel.
      */
     private void setupHeroCarousel(List<MediaItem> candidates) {
-        if (isTv || heroContainer == null || heroPager == null) return;
+        if (heroContainer == null || heroPager == null) return;
         List<MediaItem> combined = new ArrayList<>();
         if (candidates != null) {
             for (MediaItem c : candidates) {
@@ -1106,7 +1390,7 @@ public class HomeActivity extends AppCompatActivity {
     }
 
     private void applyHeroCarousel() {
-        if (isTv || heroContainer == null || heroPager == null) return;
+        if (heroContainer == null || heroPager == null) return;
         List<MediaItem> heroItems = new ArrayList<>(currentHeroItems);
         if (heroItems.isEmpty()) {
             heroContainer.setVisibility(View.GONE);
@@ -1121,22 +1405,56 @@ public class HomeActivity extends AppCompatActivity {
         heroScrollOffset = 0f;
         heroContainer.setTranslationY(0f);
         updateHomeTopPadding(true);
+        if (isTv) {
+            if (tvNestedScroll != null) {
+                tvNestedScroll.scrollTo(0, 0);
+            }
+            heroContainer.post(() -> {
+                if (!pendingTvFocusRestore && lastFocusedSectionPos <= 0) {
+                    focusHeroPlayButton();
+                }
+            });
+        }
         heroPager.setAdapter(new HeroPagerAdapter(heroItems, new HeroPagerAdapter.Listener() {
             @Override public void onPlay(MediaItem item) { openDetail(item); }
             @Override public void onInfo(MediaItem item) { openDetail(item); }
-        }));
+            @Override
+            public void onToggleMyList(MediaItem item, int position) {
+                if (item == null) return;
+                UserDataManager udm = UserDataManager.getInstance(HomeActivity.this);
+                boolean wasFav = udm.isFavorite(item);
+                if (wasFav) {
+                    udm.removeFromFavorites(item);
+                    Toast.makeText(HomeActivity.this, "Eliminado de Mi Lista", Toast.LENGTH_SHORT).show();
+                } else {
+                    udm.addToFavorites(item);
+                    Toast.makeText(HomeActivity.this, "Añadido a Mi Lista", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }, isTv));
         heroPager.setOffscreenPageLimit(1);
         heroPager.setPageTransformer((page, position) ->
                 page.setScaleY(1f - Math.min(0.04f, Math.abs(position) * 0.04f)));
 
         heroDots.removeAllViews();
+        float density = getResources().getDisplayMetrics().density;
         for (int i = 0; i < heroItems.size(); i++) {
             ImageView dot = new ImageView(this);
-            dot.setImageResource(i == 0 ? R.drawable.dot_active : R.drawable.dot_inactive);
-            android.widget.LinearLayout.LayoutParams params =
-                    new android.widget.LinearLayout.LayoutParams(7, 7);
-            params.setMargins(4, 0, 4, 0);
-            heroDots.addView(dot, params);
+            if (isTv) {
+                dot.setImageResource(i == 0 ? R.drawable.bg_hero_dot_active_hbomax : R.drawable.bg_hero_dot_inactive_hbomax);
+                android.widget.LinearLayout.LayoutParams params =
+                        new android.widget.LinearLayout.LayoutParams(
+                                i == 0 ? (int)(22 * density) : (int)(6 * density),
+                                (int)(6 * density));
+                params.setMargins((int)(4 * density), 0, (int)(4 * density), 0);
+                heroDots.addView(dot, params);
+            } else {
+                dot.setImageResource(i == 0 ? R.drawable.dot_active : R.drawable.dot_inactive);
+                android.widget.LinearLayout.LayoutParams params =
+                        new android.widget.LinearLayout.LayoutParams(7, 7);
+                params.setMargins(4, 0, 4, 0);
+                heroDots.addView(dot, params);
+            }
         }
         if (heroPageCallback != null) {
             heroPager.unregisterOnPageChangeCallback(heroPageCallback);
@@ -1144,8 +1462,35 @@ public class HomeActivity extends AppCompatActivity {
         heroPageCallback = new ViewPager2.OnPageChangeCallback() {
             @Override public void onPageSelected(int position) {
                 for (int i = 0; i < heroDots.getChildCount(); i++) {
-                    ((ImageView) heroDots.getChildAt(i)).setImageResource(
-                            i == position ? R.drawable.dot_active : R.drawable.dot_inactive);
+                    ImageView dotView = (ImageView) heroDots.getChildAt(i);
+                    if (isTv) {
+                        dotView.setImageResource(i == position ? R.drawable.bg_hero_dot_active_hbomax : R.drawable.bg_hero_dot_inactive_hbomax);
+                        android.view.ViewGroup.LayoutParams lp = dotView.getLayoutParams();
+                        lp.width = (int) ((i == position ? 22 : 6) * density);
+                        dotView.setLayoutParams(lp);
+                    } else {
+                        dotView.setImageResource(
+                                i == position ? R.drawable.dot_active : R.drawable.dot_inactive);
+                    }
+                }
+
+                if (isTv && heroContainer != null && heroContainer.getVisibility() == View.VISIBLE) {
+                    if (heroContainer.hasFocus()) {
+                        focusHeroPlayButton();
+                        heroContainer.post(() -> focusHeroPlayButton());
+                        heroContainer.postDelayed(() -> focusHeroPlayButton(), 120L);
+                    }
+                }
+            }
+
+            @Override public void onPageScrollStateChanged(int state) {
+                if (state == ViewPager2.SCROLL_STATE_IDLE && isTv && heroContainer != null && heroContainer.getVisibility() == View.VISIBLE) {
+                    if (heroContainer.hasFocus()) {
+                        View play = getCurrentHeroPlayButton();
+                        if (play != null && !play.hasFocus()) {
+                            play.requestFocus();
+                        }
+                    }
                 }
             }
         };
@@ -1160,7 +1505,7 @@ public class HomeActivity extends AppCompatActivity {
         List<MediaItem> toVerify = new ArrayList<>();
         for (MediaItem c : items) {
             if (c == null) continue;
-            boolean playable = c.getPostId() > 0
+            boolean playable = c.getPostId() > 0 || c.getTmdbId() > 0
                     || (c.getDetailUrl() != null && !c.getDetailUrl().isEmpty());
             if (!playable) toVerify.add(c);
         }
@@ -1174,6 +1519,8 @@ public class HomeActivity extends AppCompatActivity {
                             item.getTitulo(), item.getAnio(), item.getMediaType());
                     if (found != null && found.id > 0) {
                         item.setPostId(found.id);
+                        if (item.getTmdbId() <= 0) item.setTmdbId(found.id);
+                        if (found.detailUrl != null && !found.detailUrl.isEmpty()) item.setDetailUrl(found.detailUrl);
                     }
                 } catch (Exception ignored) {
                 }
@@ -1195,8 +1542,105 @@ public class HomeActivity extends AppCompatActivity {
     private void updateHomeTopPadding(boolean heroVisible) {
         if (rvSections == null) return;
         float density = getResources().getDisplayMetrics().density;
-        int top = heroVisible ? (int) (420f * density) : (int) (24f * density);
-        rvSections.setPadding(0, top, 0, (int) (100f * density));
+        if (isTv) {
+            rvSections.setPadding(0, 0, 0, (int) (140f * density));
+            return;
+        }
+        int heroHeightDp = 420;
+        int top = heroVisible ? (int) (heroHeightDp * density) : (int) (24f * density);
+        int bottom = (int) (100f * density);
+        rvSections.setPadding(0, top, 0, bottom);
+    }
+
+    private int currentTvScrolledSection = -1;
+
+    public void onHeroFocused() {
+        lastFocusedSectionPos = -1;
+        lastFocusedItemPos = 0;
+        currentTvScrolledSection = -1;
+    }
+
+    public void scrollTvToSection(int sectionPosition) {
+        if (!isTv || tvNestedScroll == null || rvSections == null) return;
+        if (currentTvScrolledSection == sectionPosition) return;
+        currentTvScrolledSection = sectionPosition;
+        rvSections.post(() -> {
+            RecyclerView.ViewHolder holder = rvSections.findViewHolderForAdapterPosition(sectionPosition);
+            float density = getResources().getDisplayMetrics().density;
+            if (holder != null && holder.itemView != null) {
+                int targetY = rvSections.getTop() + holder.itemView.getTop();
+                int scrollY = Math.max(0, targetY - (int) (70 * density));
+                tvNestedScroll.smoothScrollTo(0, scrollY);
+            } else {
+                int heroH = (heroContainer != null && heroContainer.getVisibility() == View.VISIBLE)
+                        ? heroContainer.getHeight() : 0;
+                if (heroH <= 0 && heroContainer != null && heroContainer.getVisibility() == View.VISIBLE) {
+                    heroH = (int) (460 * density);
+                }
+                int estimatedRowH = (int) (280 * density);
+                int targetY = heroH + (sectionPosition * estimatedRowH);
+                int scrollY = Math.max(0, targetY - (int) (70 * density));
+                tvNestedScroll.smoothScrollTo(0, scrollY);
+                rvSections.scrollToPosition(sectionPosition);
+            }
+        });
+    }
+
+    public View getCurrentHeroPlayButton() {
+        if (heroPager == null) return null;
+        int current = heroPager.getCurrentItem();
+        View internalRv = heroPager.getChildAt(0);
+        if (internalRv instanceof RecyclerView) {
+            RecyclerView.ViewHolder vh = ((RecyclerView) internalRv).findViewHolderForAdapterPosition(current);
+            if (vh != null && vh.itemView != null) {
+                View play = vh.itemView.findViewById(R.id.btn_hero_play);
+                if (play != null) return play;
+            }
+        }
+        return heroPager.findViewById(R.id.btn_hero_play);
+    }
+
+    public boolean focusHeroPlayButton() {
+        if (!isTv || heroContainer == null || heroContainer.getVisibility() != View.VISIBLE) {
+            return false;
+        }
+        if (tvNestedScroll != null) {
+            tvNestedScroll.scrollTo(0, 0);
+        }
+        onHeroFocused();
+        View play = getCurrentHeroPlayButton();
+        if (play != null) {
+            play.setFocusable(true);
+            play.setFocusableInTouchMode(true);
+            play.requestFocus();
+            return true;
+        }
+        heroContainer.post(() -> {
+            View p = getCurrentHeroPlayButton();
+            if (p != null) {
+                p.requestFocus();
+            }
+        });
+        return true;
+    }
+
+    public boolean focusFirstSectionFromHero() {
+        if (!isTv || rvSections == null || adapter == null || adapter.getItemCount() == 0) {
+            return false;
+        }
+        scrollTvToSection(0);
+        adapter.requestFocusAt(0, 0);
+        return true;
+    }
+
+    public boolean focusSidebarFromHero() {
+        if (!isTv) return false;
+        lastFocusedSectionPos = 0;
+        if (menuHome != null && menuHome.isShown()) {
+            menuHome.requestFocus();
+            return true;
+        }
+        return false;
     }
 
     private void startHeroAutoScroll(int itemCount) {
@@ -1205,8 +1649,12 @@ public class HomeActivity extends AppCompatActivity {
         heroAutoScroll = new Runnable() {
             @Override public void run() {
                 if (heroPager == null || heroPager.getAdapter() == null) return;
+                boolean heroActive = isTv && (heroContainer != null && heroContainer.hasFocus());
                 int next = (heroPager.getCurrentItem() + 1) % itemCount;
                 heroPager.setCurrentItem(next, true);
+                if (heroActive && heroContainer != null) {
+                    heroContainer.postDelayed(() -> focusHeroPlayButton(), 120L);
+                }
                 heroHandler.postDelayed(this, 5000L);
             }
         };
@@ -1258,14 +1706,12 @@ public class HomeActivity extends AppCompatActivity {
         }
 
         pendingTvFocusRestore = false;
-        rvSections.post(() -> {
-            RecyclerView.LayoutManager manager = rvSections.getLayoutManager();
-            if (manager instanceof LinearLayoutManager) {
-                ((LinearLayoutManager) manager)
-                        .scrollToPositionWithOffset(Math.max(0, lastHomeFirstVisiblePos), lastHomeTopOffset);
-            }
-            rvSections.post(() -> adapter.requestFocusAt(lastFocusedSectionPos, lastFocusedItemPos));
-        });
+        if (lastFocusedSectionPos == -1) {
+            focusHeroPlayButton();
+            return;
+        }
+        scrollTvToSection(lastFocusedSectionPos);
+        rvSections.post(() -> adapter.requestFocusAt(lastFocusedSectionPos, lastFocusedItemPos));
     }
 
     private List<Section> buildCategorySections(List<Section> sourceSections) {
@@ -1276,6 +1722,11 @@ public class HomeActivity extends AppCompatActivity {
         if (sourceSections != null) {
             for (Section section : sourceSections) {
                 if (section == null || section.getItems() == null) {
+                    continue;
+                }
+                if ("Continuar Viendo".equals(section.getTitle())
+                        || "❤️ Mis Favoritos".equals(section.getTitle())
+                        || "🕐 Historial".equals(section.getTitle())) {
                     continue;
                 }
                 for (MediaItem item : section.getItems()) {
@@ -1321,6 +1772,11 @@ public class HomeActivity extends AppCompatActivity {
             if (section == null || section.getItems() == null) {
                 continue;
             }
+            if ("Continuar Viendo".equals(section.getTitle())
+                    || "❤️ Mis Favoritos".equals(section.getTitle())
+                    || "🕐 Historial".equals(section.getTitle())) {
+                continue;
+            }
             List<MediaItem> filtered = new ArrayList<>();
             for (MediaItem item : section.getItems()) {
                 if (item == null) {
@@ -1350,6 +1806,11 @@ public class HomeActivity extends AppCompatActivity {
 
         for (Section section : sourceSections) {
             if (section == null || section.getItems() == null) {
+                continue;
+            }
+            if ("Continuar Viendo".equals(section.getTitle())
+                    || "❤️ Mis Favoritos".equals(section.getTitle())
+                    || "🕐 Historial".equals(section.getTitle())) {
                 continue;
             }
             List<MediaItem> filtered = new ArrayList<>();

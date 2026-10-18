@@ -24,6 +24,7 @@ import sv.edu.catolica.rex.models.MediaItem;
 import sv.edu.catolica.rex.models.Section;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
 import sv.edu.catolica.rex.network.TmdbService;
+import sv.edu.catolica.rex.source.UnifiedSearchService;
 import sv.edu.catolica.rex.ui.detalle.DetalleActivity;
 
 public class SearchActivity extends AppCompatActivity {
@@ -54,7 +55,6 @@ public class SearchActivity extends AppCompatActivity {
         searchView = findViewById(R.id.search_view);
 
         rvSections.setLayoutManager(new LinearLayoutManager(this));
-        rvSections.setHasFixedSize(true);
         rvSections.setItemAnimator(null);
         adapter = new HomeAdapter(this, new ArrayList<>(),
                 item -> DetalleActivity.start(SearchActivity.this, item), isTv);
@@ -69,8 +69,7 @@ public class SearchActivity extends AppCompatActivity {
     }
 
     private boolean isTvDevice() {
-        UiModeManager mgr = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
-        return mgr != null && mgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
+        return sv.edu.catolica.rex.utils.TvUtils.isTv(this);
     }
 
     private void setupSearchBehavior() {
@@ -158,32 +157,32 @@ public class SearchActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                List<AllCalidadScraper.ContentItem> results = AllCalidadScraper.search(safeQuery, 1);
-                List<MediaItem> mapped = mapItems(results, 40);
-                List<MediaItem> tmdbMapped = TmdbService.searchMedia(safeQuery, 40);
-                List<MediaItem> merged = mergeSearchResults(mapped, tmdbMapped, 60);
-
-                List<MediaItem> movies = new ArrayList<>();
-                List<MediaItem> series = new ArrayList<>();
-                for (MediaItem item : merged) {
-                    String type = item.getMediaType() == null ? ""
-                            : item.getMediaType().toLowerCase(Locale.ROOT);
-                    if ("tvshows".equals(type) || "animes".equals(type)) {
-                        series.add(item);
-                    } else {
-                        movies.add(item);
-                    }
-                }
+                UnifiedSearchService searchService = UnifiedSearchService.getInstance();
+                UnifiedSearchService.SearchResult searchResult = searchService.searchUnified(safeQuery, 30);
 
                 List<Section> sections = new ArrayList<>();
-                if (!movies.isEmpty()) {
-                    sections.add(new Section("Peliculas", movies));
+                int topMovieScore = !searchResult.getMovies().isEmpty()
+                        ? UnifiedSearchService.computeQueryRelevance(safeQuery, searchResult.getMovies().get(0)) : 0;
+                int topSeriesScore = !searchResult.getSeries().isEmpty()
+                        ? UnifiedSearchService.computeQueryRelevance(safeQuery, searchResult.getSeries().get(0)) : 0;
+
+                if (topSeriesScore > topMovieScore) {
+                    if (!searchResult.getSeries().isEmpty()) {
+                        sections.add(new Section("Series", searchResult.getSeries()));
+                    }
+                    if (!searchResult.getMovies().isEmpty()) {
+                        sections.add(new Section("Peliculas", searchResult.getMovies()));
+                    }
+                } else {
+                    if (!searchResult.getMovies().isEmpty()) {
+                        sections.add(new Section("Peliculas", searchResult.getMovies()));
+                    }
+                    if (!searchResult.getSeries().isEmpty()) {
+                        sections.add(new Section("Series", searchResult.getSeries()));
+                    }
                 }
-                if (!series.isEmpty()) {
-                    sections.add(new Section("Series", series));
-                }
-                if (sections.isEmpty()) {
-                    sections.add(new Section("Resultados", merged));
+                if (sections.isEmpty() && !searchResult.getAll().isEmpty()) {
+                    sections.add(new Section("Resultados", searchResult.getAll()));
                 }
 
                 runOnUiThread(() -> {
@@ -191,7 +190,7 @@ public class SearchActivity extends AppCompatActivity {
                         return;
                     }
                     progressBar.setVisibility(ProgressBar.GONE);
-                    if (merged.isEmpty()) {
+                    if (searchResult.isEmpty()) {
                         showSections(new ArrayList<>());
                         Toast.makeText(SearchActivity.this,
                                 "Sin resultados para: " + safeQuery, Toast.LENGTH_SHORT).show();
@@ -201,7 +200,7 @@ public class SearchActivity extends AppCompatActivity {
                 });
 
                 List<MediaItem> enrichCandidates = new ArrayList<>();
-                for (MediaItem item : merged) {
+                for (MediaItem item : searchResult.getAll()) {
                     if (item == null) {
                         continue;
                     }
@@ -301,9 +300,16 @@ public class SearchActivity extends AppCompatActivity {
             adapter = new HomeAdapter(this, sections,
                     item -> DetalleActivity.start(SearchActivity.this, item), isTv);
             rvSections.setAdapter(adapter);
-            return;
+        } else {
+            adapter.setSections(sections);
         }
-        adapter.setSections(sections);
+        if (isTv && sections != null && !sections.isEmpty()) {
+            rvSections.post(() -> {
+                if (adapter != null && adapter.getItemCount() > 0) {
+                    adapter.requestFocusAt(0, 0);
+                }
+            });
+        }
     }
 
     @Override

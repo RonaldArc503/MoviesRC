@@ -3,10 +3,11 @@ package sv.edu.catolica.rex.source;
 import android.content.Context;
 import android.content.SharedPreferences;
 import java.util.Locale;
+import java.util.Map;
 import sv.edu.catolica.rex.network.smart.SmartPlaybackResult;
 
 public final class SourceAwareCache {
-    private static final String PREF = "source_aware_cache";
+    private static final String PREF = "source_aware_cache_v2";
     private static final long TTL_MS = 6L * 60L * 60L * 1000L;
 
     private SourceAwareCache() {}
@@ -62,5 +63,40 @@ public final class SourceAwareCache {
 
     private static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    public static void cleanExpiredEntries(Context context) {
+        if (context == null) return;
+        try {
+            SharedPreferences p = context.getSharedPreferences(PREF, Context.MODE_PRIVATE);
+            Map<String, ?> all = p.getAll();
+            if (all == null || all.isEmpty()) return;
+
+            long now = System.currentTimeMillis();
+            SharedPreferences.Editor editor = p.edit();
+            boolean changed = false;
+
+            for (Map.Entry<String, ?> entry : all.entrySet()) {
+                String key = entry.getKey();
+                Object val = entry.getValue();
+                if (!(val instanceof String)) continue;
+
+                String[] parts = ((String) val).split("\\n", 2);
+                try {
+                    long ts = Long.parseLong(parts[0]);
+                    if (now - ts > TTL_MS) {
+                        editor.remove(key);
+                        changed = true;
+                    }
+                } catch (Exception ignored) {
+                    editor.remove(key);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                editor.apply();
+            }
+        } catch (Exception ignored) {}
     }
 }

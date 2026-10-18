@@ -6,12 +6,21 @@ public class SourceRegistry {
     public static synchronized MultiSourceRepository getInstance() {
         if (INSTANCE == null) {
             INSTANCE = new MultiSourceRepository();
-            // register default sources: AllCalidad primary, then Pelispedia fallback
+            // register default sources: AllCalidad primary, then Cuevana3, then Pelispedia fallback
             try {
                 INSTANCE.registerSource(new AllCalidadSource());
             } catch (Throwable ignored) { }
             try {
+                INSTANCE.registerSource(new Cuevana3Source());
+            } catch (Throwable ignored) { }
+            try {
                 INSTANCE.registerSource(new PelispediaSource());
+            } catch (Throwable ignored) { }
+            try {
+                INSTANCE.registerSource(new CanelaSource());
+            } catch (Throwable ignored) { }
+            try {
+                INSTANCE.registerSource(new TuDoramaSource());
             } catch (Throwable ignored) { }
         }
         return INSTANCE;

@@ -59,6 +59,54 @@
                 android:paddingBottom="2dp"
                 android:visibility="gone" />
 
+            <!-- Play overlay badge (estilo Netflix para continuar viendo) -->
+            <ImageView
+                android:id="@+id/iv_play_overlay"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_play"
+                android:background="@drawable/bg_card_play_badge"
+                android:padding="9dp"
+                app:tint="#FFFFFF"
+                android:visibility="gone" />
+
+            <!-- Overlay Quitar de la lista al mantener presionado en Favoritos -->
+            <FrameLayout
+                android:id="@+id/overlay_remove_fav"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="#E60A0C10"
+                android:clickable="true"
+                android:focusable="false"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="6dp">
+
+                    <ImageView
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:src="@drawable/ic_clear"
+                        app:tint="#E63540"
+                        android:contentDescription="@null" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:fontFamily="sans-serif-bold"
+                        android:gravity="center"
+                        android:text="Quitar de\nla lista"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </FrameLayout>
+
         </FrameLayout>
 
         <!-- ── BARRA DE PROGRESO (roja, estilo Netflix) ── -->
@@ -81,7 +129,7 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_gravity="start"
-                android:background="#E63540" />
+                android:background="#E50914" />
         </FrameLayout>
 
         <!-- ── ZONA DE TEXTO ── -->
@@ -98,8 +146,8 @@
                 android:id="@+id/tv_title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="#D4D6DE"
-                android:textSize="11sp"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
                 android:textStyle="bold"
                 android:maxLines="1"
                 android:ellipsize="end" />
@@ -108,8 +156,8 @@
                 android:id="@+id/tv_year"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="#5A5F70"
-                android:textSize="10sp"
+                android:textColor="#D0D3DE"
+                android:textSize="11sp"
                 android:layout_marginTop="2dp"
                 android:maxLines="1"
                 android:ellipsize="end" />

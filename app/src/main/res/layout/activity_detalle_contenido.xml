@@ -181,10 +181,8 @@
                     <!-- Botón Reproducir -->
                     <androidx.appcompat.widget.AppCompatButton
                         android:id="@+id/btn_play"
-                        android:layout_width="0dp"
+                        android:layout_width="match_parent"
                         android:layout_height="54dp"
-                        android:layout_weight="1"
-                        android:layout_marginEnd="10dp"
                         android:background="@drawable/bg_btn_play_red"
                         android:text="▶ Reproducir"
                         android:textColor="@color/white"
@@ -192,22 +190,6 @@
                         android:textStyle="bold"
                         android:textAllCaps="false"
                         android:elevation="2dp" />
-
-                    <!-- Botón compartir o secundario -->
-                    <androidx.appcompat.widget.AppCompatButton
-                        android:id="@+id/btn_share"
-                        android:layout_width="0dp"
-                        android:layout_height="54dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="10dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:text="Compartir"
-                        android:textColor="@color/white"
-                        android:textSize="16sp"
-                        android:textStyle="bold"
-                        android:textAllCaps="false"
-                        android:visibility="gone" />
-
                 </LinearLayout>
 
                 <!-- Sinopsis -->

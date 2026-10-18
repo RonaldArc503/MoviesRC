@@ -14,7 +14,7 @@
 
     <application
         android:allowBackup="true"
-        android:banner="@mipmap/ic_launcher"
+        android:banner="@drawable/banner_tv"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -34,11 +34,19 @@
         </activity>
         <activity
             android:name=".ui.home.HomeActivity"
-            android:banner="@mipmap/ic_launcher"
+            android:banner="@drawable/banner_tv"
             android:exported="true" />
         <activity android:name=".ui.home.SearchActivity" />
         <activity android:name=".ui.home.TvChannelsActivity" />
         <activity android:name=".ui.football.FootballActivity" />
+        <activity
+            android:name=".ui.novelas.NovelasActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
+        <activity
+            android:name=".ui.doramas.DoramasActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
         <activity
             android:name=".ui.player.FootballWebPlayerActivity"
             android:screenOrientation="sensorLandscape" />
@@ -46,9 +54,13 @@
         <activity android:name=".ui.detalle.DetalleActivity" />
         <activity
             android:name=".ui.player.PlayerContenidoActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:hardwareAccelerated="true"
             android:screenOrientation="sensorLandscape" />
         <activity
             android:name=".ui.player.PlayerExoActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:hardwareAccelerated="true"
             android:screenOrientation="sensorLandscape" />
         <activity android:name=".MainActivity" />
 

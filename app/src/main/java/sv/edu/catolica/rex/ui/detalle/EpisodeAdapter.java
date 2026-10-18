@@ -17,6 +17,7 @@ import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import sv.edu.catolica.rex.R;
 import sv.edu.catolica.rex.network.AllCalidadScraper;
@@ -122,13 +123,28 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.EpisodeV
         holder.tvDescription.setVisibility(overview.isEmpty() ? View.GONE : View.VISIBLE);
 
         // Thumbnail: still del episodio o poster de la serie
-        String thumb = (episode != null && episode.stillUrl != null && !episode.stillUrl.trim().isEmpty())
-                ? episode.stillUrl.trim() : seriesPosterUrl;
-        if (thumb.isEmpty()) {
+        String still = (episode != null && episode.stillUrl != null && !episode.stillUrl.trim().isEmpty())
+                ? episode.stillUrl.trim() : "";
+        String primary = sanitizeImageUrl(!still.isEmpty() ? still : seriesPosterUrl);
+        String fallback = sanitizeImageUrl(!still.isEmpty() ? seriesPosterUrl : "");
+
+        if (primary.isEmpty()) {
             holder.imgThumb.setImageResource(R.drawable.placeholder_backdrop);
+        } else if (!fallback.isEmpty() && !fallback.equals(primary)) {
+            Glide.with(holder.itemView.getContext())
+                    .load(primary)
+                    .transition(DrawableTransitionOptions.withCrossFade(120))
+                    .placeholder(R.drawable.placeholder_backdrop)
+                    .error(Glide.with(holder.itemView.getContext())
+                            .load(fallback)
+                            .placeholder(R.drawable.placeholder_backdrop)
+                            .error(R.drawable.placeholder_backdrop)
+                            .centerCrop())
+                    .centerCrop()
+                    .into(holder.imgThumb);
         } else {
             Glide.with(holder.itemView.getContext())
-                    .load(thumb)
+                    .load(primary)
                     .transition(DrawableTransitionOptions.withCrossFade(120))
                     .placeholder(R.drawable.placeholder_backdrop)
                     .error(R.drawable.placeholder_backdrop)
@@ -159,8 +175,6 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.EpisodeV
                 listener.onEpisodeClick(episode);
             }
         });
-        holder.btnDownload.setOnClickListener(v ->
-                Toast.makeText(holder.itemView.getContext(), "Descargas — Próximamente", Toast.LENGTH_SHORT).show());
 
         if (isTvDevice) {
             holder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
@@ -202,7 +216,6 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.EpisodeV
         final ImageView imgThumb;
         final TextView tvTitle;
         final TextView tvDescription;
-        final ImageButton btnDownload;
         final View progressContainer;
         final View progressBg;
         final View progressFg;
@@ -212,7 +225,6 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.EpisodeV
             imgThumb = itemView.findViewById(R.id.img_episode_thumb);
             tvTitle = itemView.findViewById(R.id.tv_episode_title);
             tvDescription = itemView.findViewById(R.id.tv_episode_description);
-            btnDownload = itemView.findViewById(R.id.btn_episode_download);
             progressContainer = itemView.findViewById(R.id.episode_progress_container);
             progressBg = itemView.findViewById(R.id.episode_progress_bg);
             progressFg = itemView.findViewById(R.id.episode_progress_fg);
@@ -220,15 +232,24 @@ public class EpisodeAdapter extends RecyclerView.Adapter<EpisodeAdapter.EpisodeV
     }
 
     private boolean detectTvDevice(Context context) {
-        if (context == null) return false;
-        android.app.UiModeManager uiModeManager =
-                (android.app.UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
-        if (uiModeManager != null
-                && uiModeManager.getCurrentModeType() == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) {
-            return true;
+        return sv.edu.catolica.rex.utils.TvUtils.isTv(context);
+    }
+
+    private static String sanitizeImageUrl(String rawUrl) {
+        if (rawUrl == null) return "";
+        String value = rawUrl.trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) return "";
+        if (value.toLowerCase(Locale.ROOT).contains("null")) return "";
+        if (value.startsWith("//")) return "https:" + value;
+        if (value.startsWith("/")) {
+            if (value.startsWith("/poster/")) {
+                return "https://wv3.cuevana3.eu" + value;
+            }
+            return "https://allcalidad.re" + value;
         }
-        int uiMode = context.getResources().getConfiguration().uiMode;
-        return (uiMode & android.content.res.Configuration.UI_MODE_TYPE_MASK)
-                == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION;
+        if (!value.startsWith("http://") && !value.startsWith("https://")) {
+            return "https://" + value;
+        }
+        return value;
     }
 }
